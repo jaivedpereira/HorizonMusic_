@@ -1,0 +1,21 @@
+workflows:
+  android-build:
+    name: Android APK Build
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      android_sdk: latest
+      jdk: 17
+    triggering:
+      events:
+        - push
+      branches:
+        - main
+    scripts:
+      - name: Build APK
+        script: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
+    artifacts:
+      - app/build/outputs/apk/release/*.apk
+      
