@@ -12,7 +12,8 @@ data class Track(
     val duration: Long,
     val uri: String,
     val isLocal: Boolean,
-    val album: String = ""
+    val album: String = "",
+    val albumArt: String? = null
 ) {
     fun toFavoriteEntity() = FavoriteTrackEntity(
         trackId = id,

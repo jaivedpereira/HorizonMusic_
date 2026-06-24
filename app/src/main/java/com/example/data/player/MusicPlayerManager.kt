@@ -1,8 +1,13 @@
 package com.example.data.player
 
 import android.content.Context
+import android.content.Intent
+import android.media.MediaMetadata
 import android.media.MediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import com.example.data.db.Track
 import kotlinx.coroutines.*
@@ -47,8 +52,102 @@ class MusicPlayerManager(private val context: Context) {
     // Lista original antes de embaralhar (shuffle)
     private var originalQueue = listOf<Track>()
 
+    // MediaSession nativa do Android para integração com o SO, fone de ouvido, etc.
+    private var mediaSession: MediaSession? = null
+    val mediaSessionToken: Any?
+        get() = mediaSession?.sessionToken
+
+    companion object {
+        @Volatile
+        var instance: MusicPlayerManager? = null
+            private set
+    }
+
     init {
+        instance = this
+        initializeMediaSession()
         initializePlayer()
+    }
+
+    private fun initializeMediaSession() {
+        try {
+            mediaSession = MediaSession(context, "HorizonMusic").apply {
+                setCallback(object : MediaSession.Callback() {
+                    override fun onPlay() {
+                        togglePlayPause()
+                    }
+                    override fun onPause() {
+                        togglePlayPause()
+                    }
+                    override fun onSkipToNext() {
+                        skipToNext()
+                    }
+                    override fun onSkipToPrevious() {
+                        skipToPrevious()
+                    }
+                    override fun onSeekTo(pos: Long) {
+                        seekTo(pos)
+                    }
+                })
+                isActive = true
+            }
+        } catch (e: Exception) {
+            Log.e("MusicPlayerManager", "Erro ao inicializar MediaSession", e)
+        }
+    }
+
+    private fun updateMediaSessionState() {
+        val session = mediaSession ?: return
+        try {
+            val stateBuilder = PlaybackState.Builder()
+                .setActions(
+                    PlaybackState.ACTION_PLAY or
+                    PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PLAY_PAUSE or
+                    PlaybackState.ACTION_SKIP_TO_NEXT or
+                    PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                    PlaybackState.ACTION_SEEK_TO
+                )
+            
+            val state = if (_isPlaying.value) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+            stateBuilder.setState(state, _currentPosition.value, 1.0f)
+            session.setPlaybackState(stateBuilder.build())
+        } catch (e: Exception) {
+            Log.e("MusicPlayerManager", "Erro ao atualizar estado da MediaSession", e)
+        }
+    }
+
+    private fun updateMediaSessionMetadata() {
+        val session = mediaSession ?: return
+        val track = _currentTrack.value ?: return
+        try {
+            val metadataBuilder = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, _duration.value)
+            
+            session.setMetadata(metadataBuilder.build())
+        } catch (e: Exception) {
+            Log.e("MusicPlayerManager", "Erro ao atualizar metadados da MediaSession", e)
+        }
+    }
+
+    private fun updateServiceAndNotification() {
+        try {
+            val intent = Intent(context, MusicService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (_isPlaying.value) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            Log.e("MusicPlayerManager", "Falha ao iniciar/atualizar MusicService", e)
+        }
     }
 
     private fun initializePlayer() {
@@ -61,11 +160,16 @@ class MusicPlayerManager(private val context: Context) {
                     _duration.value = mp.duration.toLong()
                     mp.start()
                     _isPlaying.value = true
+                    updateMediaSessionMetadata()
+                    updateMediaSessionState()
+                    updateServiceAndNotification()
                     startProgressPolling()
                 }
                 setOnErrorListener { _, what, extra ->
                     Log.e("MusicPlayerManager", "MediaPlayer Error: what=$what, extra=$extra")
                     _isPlaying.value = false
+                    updateMediaSessionState()
+                    updateServiceAndNotification()
                     stopProgressPolling()
                     // Avança em caso de erro para não travar
                     skipToNext()
@@ -124,6 +228,8 @@ class MusicPlayerManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e("MusicPlayerManager", "Erro ao iniciar faixa: ${track.title}", e)
             _isPlaying.value = false
+            updateMediaSessionState()
+            updateServiceAndNotification()
             skipToNext()
         }
     }
@@ -133,11 +239,15 @@ class MusicPlayerManager(private val context: Context) {
         if (mp.isPlaying) {
             mp.pause()
             _isPlaying.value = false
+            updateMediaSessionState()
+            updateServiceAndNotification()
             stopProgressPolling()
         } else {
             if (_currentTrack.value != null) {
                 mp.start()
                 _isPlaying.value = true
+                updateMediaSessionState()
+                updateServiceAndNotification()
                 startProgressPolling()
             } else {
                 // Se a fila estiver vazia mas houver faixas, toca a primeira
@@ -153,6 +263,8 @@ class MusicPlayerManager(private val context: Context) {
         mediaPlayer?.let { mp ->
             mp.seekTo(positionMs.toInt())
             _currentPosition.value = positionMs
+            updateMediaSessionState()
+            updateServiceAndNotification()
         }
     }
 
@@ -172,6 +284,8 @@ class MusicPlayerManager(private val context: Context) {
                 // Fim da fila
                 _isPlaying.value = false
                 _currentPosition.value = 0L
+                updateMediaSessionState()
+                updateServiceAndNotification()
                 stopProgressPolling()
             }
         }
@@ -238,6 +352,8 @@ class MusicPlayerManager(private val context: Context) {
                 seekTo(0)
                 mediaPlayer?.start()
                 _isPlaying.value = true
+                updateMediaSessionState()
+                updateServiceAndNotification()
                 startProgressPolling()
             }
             else -> {
@@ -253,6 +369,8 @@ class MusicPlayerManager(private val context: Context) {
                 mediaPlayer?.let { mp ->
                     if (mp.isPlaying) {
                         _currentPosition.value = mp.currentPosition.toLong()
+                        // Atualiza o estado da MediaSession periodicamente para sincronizar o slider do SO
+                        updateMediaSessionState()
                     }
                 }
                 delay(200)
@@ -270,5 +388,8 @@ class MusicPlayerManager(private val context: Context) {
         stopProgressPolling()
         mediaPlayer?.release()
         mediaPlayer = null
+        mediaSession?.release()
+        mediaSession = null
+        instance = null
     }
 }

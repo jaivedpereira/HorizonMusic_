@@ -22,6 +22,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     
     val playerManager = MusicPlayerManager(application)
 
+    // SharedPreferences para salvar configurações do usuário persistentes
+    private val prefs = application.getSharedPreferences("horizon_settings", Context.MODE_PRIVATE)
+
+    // Preferência: Mostrar capas das músicas (Padrão: true)
+    private val _showCovers = MutableStateFlow(prefs.getBoolean("show_covers", true))
+    val showCovers: StateFlow<Boolean> = _showCovers.asStateFlow()
+
+    // Preferência: Pasta específica para varredura de arquivos locais (Padrão: "" -> Todo o armazenamento)
+    private val _customFolder = MutableStateFlow(prefs.getString("custom_folder", "") ?: "")
+    val customFolder: StateFlow<String> = _customFolder.asStateFlow()
+
     // Estados da UI
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -44,7 +55,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             duration = 302000,
             uri = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
             isLocal = false,
-            album = "Horizon Retro"
+            album = "Horizon Retro",
+            albumArt = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&q=80"
         ),
         Track(
             id = "cloud_2",
@@ -53,7 +65,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             duration = 425000,
             uri = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
             isLocal = false,
-            album = "Neon Grid"
+            album = "Neon Grid",
+            albumArt = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&q=80"
         ),
         Track(
             id = "cloud_3",
@@ -62,7 +75,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             duration = 344000,
             uri = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
             isLocal = false,
-            album = "Stargazing"
+            album = "Stargazing",
+            albumArt = "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&q=80"
         ),
         Track(
             id = "cloud_4",
@@ -71,7 +85,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             duration = 302000,
             uri = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
             isLocal = false,
-            album = "Aether Wave"
+            album = "Aether Wave",
+            albumArt = "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=400&q=80"
         ),
         Track(
             id = "cloud_5",
@@ -80,7 +95,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             duration = 363000,
             uri = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
             isLocal = false,
-            album = "Celestial"
+            album = "Celestial",
+            albumArt = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=400&q=80"
         )
     )
 
@@ -125,6 +141,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         scanLocalAudio()
     }
 
+    // Atualiza a configuração de mostrar capas de músicas
+    fun setShowCovers(enabled: Boolean) {
+        prefs.edit().putBoolean("show_covers", enabled).apply()
+        _showCovers.value = enabled
+    }
+
+    // Atualiza o diretório de varredura específico
+    fun setCustomFolder(path: String) {
+        prefs.edit().putString("custom_folder", path.trim()).apply()
+        _customFolder.value = path.trim()
+        // Executa uma nova varredura imediatamente para atualizar a fila com a nova pasta
+        scanLocalAudio()
+    }
+
     // Escaneia arquivos do armazenamento local
     fun scanLocalAudio() {
         viewModelScope.launch {
@@ -144,10 +174,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.ALBUM
+            MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.ALBUM_ID,
+            "_data" // Obtém o caminho do arquivo físico local
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
+
+        val filterPath = _customFolder.value
 
         try {
             context.contentResolver.query(uri, projection, selection, null, sortOrder)?.use { cursor ->
@@ -156,6 +190,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val artistColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val albumColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                val albumIdColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                val dataColumn = cursor.getColumnIndex("_data")
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
@@ -163,7 +199,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     val artist = cursor.getString(artistColumn) ?: "Artista Desconhecido"
                     val duration = cursor.getLong(durationColumn)
                     val album = cursor.getString(albumColumn) ?: ""
+                    val albumId = cursor.getLong(albumIdColumn)
                     val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                    
+                    val filePath = if (dataColumn != -1) cursor.getString(dataColumn) ?: "" else ""
+
+                    // Se houver filtro de pasta configurado, valida se o arquivo pertence a ela
+                    if (filterPath.isNotEmpty() && filePath.isNotEmpty()) {
+                        if (!filePath.startsWith(filterPath, ignoreCase = true)) {
+                            continue // Ignora músicas que não estão dentro da pasta específica do usuário
+                        }
+                    }
+
+                    val albumArtUri = "content://media/external/audio/albumart/$albumId"
 
                     tracksList.add(
                         Track(
@@ -173,7 +221,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                             duration = duration,
                             uri = contentUri.toString(),
                             isLocal = true,
-                            album = album
+                            album = album,
+                            albumArt = albumArtUri
                         )
                     )
                 }

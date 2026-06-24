@@ -1,11 +1,14 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -72,6 +75,10 @@ fun HorizonHomeScreen(
     val isShuffle by viewModel.playerManager.isShuffle.collectAsState()
     val repeatMode by viewModel.playerManager.repeatMode.collectAsState()
 
+    // Configurações e preferências
+    val showCovers by viewModel.showCovers.collectAsState()
+    val customFolder by viewModel.customFolder.collectAsState()
+
     // UI States locais
     var currentTab by remember { mutableStateOf(0) } // 0: Músicas, 1: Playlists, 2: Favoritos
     var isPlayerExpanded by remember { mutableStateOf(false) }
@@ -80,6 +87,7 @@ fun HorizonHomeScreen(
     // Diálogos e Modais
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var showAddToPlaylistDialogForTrack by remember { mutableStateOf<Track?>(null) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Verificação e Solicitação de Permissões
     val storagePermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -110,6 +118,35 @@ fun HorizonHomeScreen(
     LaunchedEffect(hasStoragePermission) {
         if (hasStoragePermission) {
             viewModel.scanLocalAudio()
+        }
+    }
+
+    // Solicitação de permissão de notificação para Android 13+ (necessário para o foreground service)
+    val notificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.POST_NOTIFICATIONS
+    } else {
+        null
+    }
+
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (notificationPermission != null) {
+                ContextCompat.checkSelfPermission(context, notificationPermission) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasNotificationPermission = isGranted
+    }
+
+    LaunchedEffect(isPlaying) {
+        if (isPlaying && notificationPermission != null && !hasNotificationPermission) {
+            notificationLauncher.launch(notificationPermission)
         }
     }
 
@@ -151,21 +188,33 @@ fun HorizonHomeScreen(
                             )
                         }
                         
-                        IconButton(
-                            onClick = {
-                                if (hasStoragePermission) {
-                                    viewModel.scanLocalAudio()
-                                    Toast.makeText(context, "Escanando armazenamento...", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    launcher.launch(storagePermission)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    if (hasStoragePermission) {
+                                        viewModel.scanLocalAudio()
+                                        Toast.makeText(context, "Escanando armazenamento...", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        launcher.launch(storagePermission)
+                                    }
                                 }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = "Escanear armazenamento",
+                                    tint = TextWhite
+                                )
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = "Escanear armazenamento",
-                                tint = TextWhite
-                            )
+
+                            IconButton(
+                                onClick = { showSettingsDialog = true }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Settings,
+                                    contentDescription = "Ajustes",
+                                    tint = TextWhite
+                                )
+                            }
                         }
                     }
 
@@ -274,41 +323,13 @@ fun HorizonHomeScreen(
                             .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Disco rotativo ou visualizador
-                        val infiniteTransition = rememberInfiniteTransition(label = "vinyl_rotation")
-                        val rotationAngle by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(6000, easing = LinearEasing),
-                                repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-                            ),
-                            label = "rotation"
+                        // Capa rotativa customizada do Horizon ou ícone alternativo
+                        TrackCoverArt(
+                            track = currentTrack!!,
+                            showCovers = showCovers,
+                            isPlaying = isPlaying,
+                            modifier = Modifier.size(46.dp)
                         )
-
-                        Box(
-                            modifier = Modifier
-                                .size(46.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    Brush.radialGradient(
-                                        colors = listOf(HorizonSunset, TwilightGlow)
-                                    )
-                                )
-                                .graphicsLayer {
-                                    if (isPlaying) {
-                                        rotationZ = rotationAngle
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .background(ObsidianBlack, CircleShape)
-                                    .border(2.dp, Color.Black, CircleShape)
-                            )
-                        }
 
                         Spacer(modifier = Modifier.width(12.dp))
 
@@ -415,6 +436,7 @@ fun HorizonHomeScreen(
                         hasPermission = hasStoragePermission,
                         tracks = filteredTracks,
                         favorites = favorites,
+                        showCovers = showCovers,
                         isScanning = isScanning,
                         onRequestPermission = { launcher.launch(storagePermission) },
                         onTrackSelected = { track ->
@@ -432,6 +454,7 @@ fun HorizonHomeScreen(
                             playlist = playlistDetailToShow!!,
                             viewModel = viewModel,
                             favorites = favorites,
+                            showCovers = showCovers,
                             onBack = { playlistDetailToShow = null },
                             onTrackSelected = { track, list ->
                                 viewModel.playTrack(track, list)
@@ -452,6 +475,7 @@ fun HorizonHomeScreen(
                     // ABA FAVORITOS
                     FavoritesSection(
                         favorites = favorites,
+                        showCovers = showCovers,
                         onTrackSelected = { track ->
                             viewModel.playTrack(track, favorites)
                         },
@@ -484,6 +508,7 @@ fun HorizonHomeScreen(
                     isShuffle = isShuffle,
                     repeatMode = repeatMode,
                     favorites = favorites,
+                    showCovers = showCovers,
                     onCollapse = { isPlayerExpanded = false },
                     onPlayPauseToggle = { viewModel.playerManager.togglePlayPause() },
                     onNext = { viewModel.playerManager.skipToNext() },
@@ -524,6 +549,56 @@ fun HorizonHomeScreen(
                 }
             )
         }
+
+        if (showSettingsDialog) {
+            Dialog(onDismissRequest = { showSettingsDialog = false }) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    color = ObsidianBlack,
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            // Header do Dialog
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Ajustes do Horizon",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp,
+                                    color = TextWhite
+                                )
+                                IconButton(onClick = { showSettingsDialog = false }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Fechar",
+                                        tint = TextMuted
+                                    )
+                                }
+                            }
+                            
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                            
+                            SettingsSection(
+                                showCovers = showCovers,
+                                customFolder = customFolder,
+                                onShowCoversChanged = { viewModel.setShowCovers(it) },
+                                onCustomFolderChanged = { viewModel.setCustomFolder(it) },
+                                onScanAudio = { viewModel.scanLocalAudio() }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -534,6 +609,7 @@ fun TracksListSection(
     hasPermission: Boolean,
     tracks: List<Track>,
     favorites: List<Track>,
+    showCovers: Boolean,
     isScanning: Boolean,
     onRequestPermission: () -> Unit,
     onTrackSelected: (Track) -> Unit,
@@ -711,6 +787,7 @@ fun TracksListSection(
                     TrackRowItem(
                         track = track,
                         isFavorite = isFav,
+                        showCovers = showCovers,
                         onPlayClick = { onTrackSelected(track) },
                         onFavoriteToggle = { onToggleFavorite(track) },
                         onAddToPlaylist = { onAddToPlaylist(track) }
@@ -819,6 +896,7 @@ fun PlaylistDetailSection(
     playlist: PlaylistEntity,
     viewModel: MusicViewModel,
     favorites: List<Track>,
+    showCovers: Boolean,
     onBack: () -> Unit,
     onTrackSelected: (Track, List<Track>) -> Unit,
     onToggleFavorite: (Track) -> Unit
@@ -929,6 +1007,7 @@ fun PlaylistDetailSection(
                     TrackRowItem(
                         track = track,
                         isFavorite = isFav,
+                        showCovers = showCovers,
                         onPlayClick = { onTrackSelected(track, tracks) },
                         onFavoriteToggle = { onToggleFavorite(track) },
                         onAddToPlaylist = null, // já está na playlist, podemos adicionar ação de remover
@@ -945,6 +1024,7 @@ fun PlaylistDetailSection(
 @Composable
 fun FavoritesSection(
     favorites: List<Track>,
+    showCovers: Boolean,
     onTrackSelected: (Track) -> Unit,
     onToggleFavorite: (Track) -> Unit,
     onExploreClick: () -> Unit,
@@ -1005,6 +1085,7 @@ fun FavoritesSection(
                     TrackRowItem(
                         track = track,
                         isFavorite = true,
+                        showCovers = showCovers,
                         onPlayClick = { onTrackSelected(track) },
                         onFavoriteToggle = { onToggleFavorite(track) },
                         onAddToPlaylist = onAddToPlaylist
@@ -1021,6 +1102,7 @@ fun FavoritesSection(
 fun TrackRowItem(
     track: Track,
     isFavorite: Boolean,
+    showCovers: Boolean,
     onPlayClick: () -> Unit,
     onFavoriteToggle: () -> Unit,
     onAddToPlaylist: ((Track) -> Unit)? = null,
@@ -1033,22 +1115,13 @@ fun TrackRowItem(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Ícone decorativo procedural de disco
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(ObsidianSlate)
-                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (track.isLocal) Icons.Rounded.Storage else Icons.Rounded.CloudQueue,
-                contentDescription = null,
-                tint = if (track.isLocal) TwilightGlow.copy(alpha = 0.8f) else HorizonSunset.copy(alpha = 0.8f),
-                modifier = Modifier.size(18.dp)
-            )
-        }
+        // Capa customizada ou ícone procedural minimalista dependendo das configurações
+        TrackCoverArt(
+            track = track,
+            showCovers = showCovers,
+            isPlaying = false,
+            modifier = Modifier.size(44.dp)
+        )
 
         Spacer(modifier = Modifier.width(12.dp))
 
@@ -1206,6 +1279,7 @@ fun FullPlayerView(
     isShuffle: Boolean,
     repeatMode: RepeatMode,
     favorites: List<Track>,
+    showCovers: Boolean,
     onCollapse: () -> Unit,
     onPlayPauseToggle: () -> Unit,
     onNext: () -> Unit,
@@ -1225,6 +1299,10 @@ fun FullPlayerView(
             .background(ObsidianBlack)
             .statusBarsPadding()
             .navigationBarsPadding()
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null
+            ) { /* Consumir cliques para evitar propagação para as músicas atrás */ }
             .testTag("full_player")
     ) {
         Column(
@@ -1267,7 +1345,7 @@ fun FullPlayerView(
                 }
             }
 
-            // Procedural Canvas Horizon Sunset Visualizer
+            // Área de Capa / Visualizador de Acordo com Ajustes de Desempenho
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1275,12 +1353,25 @@ fun FullPlayerView(
                     .padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
-                HorizonCanvasVisualizer(
-                    isPlaying = isPlaying,
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .aspectRatio(1f)
-                )
+                if (showCovers) {
+                    // Grande CD/Vinil giratório de alta fidelidade
+                    TrackCoverArt(
+                        track = track,
+                        showCovers = true,
+                        isPlaying = isPlaying,
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .aspectRatio(1f)
+                    )
+                } else {
+                    // Procedural Canvas Horizon Sunset Visualizer (Máximo desempenho/fluidez)
+                    HorizonCanvasVisualizer(
+                        isPlaying = isPlaying,
+                        modifier = Modifier
+                            .fillMaxWidth(0.9f)
+                            .aspectRatio(1f)
+                    )
+                }
             }
 
             // Detalhes da música atual
@@ -1661,6 +1752,390 @@ fun AddToPlaylistDialog(
                 showCreateSubdialog = false
             }
         )
+    }
+}
+
+// ---------------------- COMPONENTES DA APARÊNCIA E AJUSTES DE PERMANÊNCIA ----------------------
+
+@Composable
+fun TrackCoverArt(
+    track: Track,
+    showCovers: Boolean,
+    isPlaying: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    if (showCovers) {
+        val hash = remember(track.id) { track.title.hashCode() }
+        val rotationAngle = if (isPlaying) {
+            val infiniteTransition = rememberInfiniteTransition(label = "cover_rotation")
+            val angle by infiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(8000, easing = LinearEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+                ),
+                label = "angle"
+            )
+            angle
+        } else {
+            0f
+        }
+
+        val gradientColors = remember(track.id) {
+            val color1 = Color((hash and 0xFFFFFF) or 0xFF000000.toInt())
+            val color2 = Color(((hash shr 8) and 0xFFFFFF) or 0xFF000000.toInt())
+            listOf(color1.copy(alpha = 0.85f), color2.copy(alpha = 0.85f))
+        }
+
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+                .graphicsLayer {
+                    if (isPlaying) {
+                        rotationZ = rotationAngle
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            var hasLoadedImage by remember(track.id) { mutableStateOf(false) }
+
+            if (track.albumArt != null) {
+                AsyncImage(
+                    model = track.albumArt,
+                    contentDescription = "Capa da música",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    onSuccess = { hasLoadedImage = true },
+                    onError = { hasLoadedImage = false }
+                )
+            }
+
+            if (!hasLoadedImage) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.linearGradient(gradientColors)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize(0.4f)
+                            .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize(0.4f)
+                                .background(Color.Black, CircleShape)
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize(0.2f)
+                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize(0.4f)
+                            .background(Color.Black, CircleShape)
+                    )
+                }
+            }
+        }
+    } else {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(ObsidianSlate)
+                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (track.isLocal) Icons.Rounded.Storage else Icons.Rounded.CloudQueue,
+                contentDescription = null,
+                tint = if (track.isLocal) TwilightGlow.copy(alpha = 0.8f) else HorizonSunset.copy(alpha = 0.8f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsSection(
+    showCovers: Boolean,
+    customFolder: String,
+    onShowCoversChanged: (Boolean) -> Unit,
+    onCustomFolderChanged: (String) -> Unit,
+    onScanAudio: () -> Unit
+) {
+    val context = LocalContext.current
+    var folderInput by remember(customFolder) { mutableStateOf(customFolder) }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            // Persiste as permissões de leitura da URI de pasta
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                Log.e("HorizonMusic", "Erro persistência permissão URI", e)
+            }
+            
+            // Tenta obter o caminho legível
+            val readablePath = if ("com.android.externalstorage.documents" == it.authority) {
+                val docId = it.path?.split(":")?.getOrNull(1) ?: ""
+                if (docId.isNotEmpty()) "/storage/emulated/0/$docId" else null
+            } else {
+                null
+            }
+
+            if (readablePath != null) {
+                onCustomFolderChanged(readablePath)
+                Toast.makeText(context, "Pasta selecionada: $readablePath", Toast.LENGTH_SHORT).show()
+            } else {
+                // Se falhar na conversão, salva a URI string em si como fallback
+                onCustomFolderChanged(it.toString())
+                Toast.makeText(context, "Pasta URI configurada!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(bottom = 100.dp)
+    ) {
+        item {
+            Text(
+                text = "Configurações & Ajustes",
+                fontWeight = FontWeight.Bold,
+                fontSize = 22.sp,
+                color = TextWhite
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Personalize sua experiência de áudio no Horizon",
+                fontSize = 13.sp,
+                color = TextMuted
+            )
+        }
+
+        // Card de Visualização / Fluidic Design
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "APARÊNCIA E FLUIDEZ",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = TwilightGlow,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Mostrar Capas das Músicas",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = TextWhite
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Carrega capas coloridas dinâmicas para as faixas. Desative para máxima fluidez nas animações.",
+                                fontSize = 12.sp,
+                                color = TextMuted
+                            )
+                        }
+                        Switch(
+                            checked = showCovers,
+                            onCheckedChange = onShowCoversChanged,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.Black,
+                                checkedTrackColor = HorizonSunset,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = ObsidianGray
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Card de Diretório de Varredura
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "DIRETÓRIO E ORIGEM",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = TwilightGlow,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Pasta de Escaneamento do Horizon",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = TextWhite
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Escolha um diretório específico para o Horizon listar suas músicas. Deixe em branco para buscar em todo o armazenamento.",
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // TextField de Entrada do Caminho da Pasta
+                    TextField(
+                        value = folderInput,
+                        onValueChange = { folderInput = it },
+                        placeholder = { Text("Ex: /storage/emulated/0/Music", color = TextMuted, fontSize = 13.sp) },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = ObsidianBlack,
+                            unfocusedContainerColor = ObsidianBlack,
+                            focusedTextColor = TextWhite,
+                            unfocusedTextColor = TextWhite,
+                            focusedIndicatorColor = HorizonSunset,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Ações de Caminho
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = { folderPickerLauncher.launch(null) },
+                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianGray),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.FolderOpen,
+                                contentDescription = null,
+                                tint = HorizonSunset,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Selecionar", color = TextWhite, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                onCustomFolderChanged(folderInput)
+                                Toast.makeText(context, "Caminho salvo com sucesso!", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = HorizonSunset),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Save,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Aplicar", color = Color.Black, fontSize = 12.sp)
+                        }
+                    }
+
+                    if (customFolder.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Ativo: $customFolder",
+                                color = TwilightGlow,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            Text(
+                                text = "Limpar Filtro",
+                                color = HorizonSunset,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clickable {
+                                        onCustomFolderChanged("")
+                                        folderInput = ""
+                                        Toast.makeText(context, "Horizon redefinido para todo o armazenamento!", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Informação da Versão
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Horizon Music Player v1.2",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Developed with Elegant Dark Theme",
+                        color = TextMuted.copy(alpha = 0.5f),
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
     }
 }
 
