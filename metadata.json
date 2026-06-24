@@ -1,0 +1,6 @@
+{
+  "name": "Horizon Music",
+  "description": "Um reprodutor de música minimalista com tema escuro, playlists personalizadas e animações fluidas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
