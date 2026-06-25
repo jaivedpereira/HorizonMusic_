@@ -1,0 +1,22 @@
+workflows:
+  android-build:
+    name: Android APK Build
+    instance_type: mac_mini_m1
+    max_build_duration: 60
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+    scripts:
+      - name: Instalar Gradle, Criar Chave e Compilar
+        script: |
+          curl -OL https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
+          unzip -q gradle-9.3.1-bin.zip
+          export PATH=$PWD/gradle-9.3.1/bin:$PATH
+          # Cria a chave de teste que o seu projeto está pedindo na raiz
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          gradle assembleDebug
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
+      
