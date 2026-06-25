@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -15,6 +16,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -39,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -531,6 +534,7 @@ fun HorizonHomeScreen(
                     favorites = favorites,
                     showCovers = showCovers,
                     extremePerformanceMode = extremePerformanceMode,
+                    viewModel = viewModel,
                     onCollapse = { isPlayerExpanded = false },
                     onPlayPauseToggle = { viewModel.playerManager.togglePlayPause() },
                     onNext = { viewModel.playerManager.skipToNext() },
@@ -899,6 +903,63 @@ fun PlaylistDetailSection(
     onToggleFavorite: (Track) -> Unit
 ) {
     val tracks by viewModel.selectedPlaylistTracks.collectAsState()
+    val context = LocalContext.current
+
+    // Launcher para selecionar imagem da galeria
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                Log.e("PlaylistDetail", "Error taking persistable permission", e)
+            }
+            viewModel.updatePlaylistCover(playlist.id, uri.toString())
+        }
+    }
+
+    var isRenaming by remember { mutableStateOf(false) }
+    var renameNameText by remember { mutableStateOf(playlist.name) }
+
+    if (isRenaming) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { isRenaming = false },
+            title = { Text("Renomear Playlist", color = TextWhite) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = renameNameText,
+                    onValueChange = { renameNameText = it },
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite,
+                        focusedBorderColor = HorizonSunset,
+                        unfocusedBorderColor = ObsidianGray
+                    ),
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        if (renameNameText.isNotBlank()) {
+                            viewModel.renamePlaylist(playlist.id, renameNameText)
+                            isRenaming = false
+                        }
+                    }
+                ) {
+                    Text("Salvar", color = HorizonSunset)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { isRenaming = false }) {
+                    Text("Cancelar", color = TextMuted)
+                }
+            },
+            containerColor = ObsidianGray
+        )
+    }
 
     LaunchedEffect(playlist.id) {
         viewModel.selectPlaylist(playlist.id)
@@ -925,13 +986,75 @@ fun PlaylistDetailSection(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Column {
-                Text(
-                    text = playlist.name,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 20.sp,
-                    color = TextWhite
-                )
+
+            // Capa da playlist clicável para alterar
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(ObsidianGray)
+                    .clickable { launcher.launch(arrayOf("image/*")) },
+                contentAlignment = Alignment.Center
+            ) {
+                if (playlist.coverUri != null) {
+                    AsyncImage(
+                        model = playlist.coverUri,
+                        contentDescription = "Capa da playlist",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.QueueMusic,
+                        contentDescription = null,
+                        tint = HorizonSunset,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                
+                // Badge pequeno indicando que pode editar
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.3f))
+                        .padding(2.dp),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "Alterar capa",
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = playlist.name,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 20.sp,
+                        color = TextWhite,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    IconButton(
+                        onClick = {
+                            renameNameText = playlist.name
+                            isRenaming = true
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Edit,
+                            contentDescription = "Renomear Playlist",
+                            tint = HorizonSunset,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Text(
                     text = "${tracks.size} faixas",
                     fontSize = 12.sp,
@@ -1222,12 +1345,21 @@ fun PlaylistItemCard(
                         .background(ObsidianGray),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.QueueMusic,
-                        contentDescription = null,
-                        tint = HorizonSunset,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    if (playlist.coverUri != null) {
+                        AsyncImage(
+                            model = playlist.coverUri,
+                            contentDescription = "Capa da playlist",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.QueueMusic,
+                            contentDescription = null,
+                            tint = HorizonSunset,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
                 
                 Column {
@@ -1278,6 +1410,7 @@ fun FullPlayerView(
     favorites: List<Track>,
     showCovers: Boolean,
     extremePerformanceMode: Boolean = false,
+    viewModel: MusicViewModel,
     onCollapse: () -> Unit,
     onPlayPauseToggle: () -> Unit,
     onNext: () -> Unit,
@@ -1289,6 +1422,7 @@ fun FullPlayerView(
     onAddToPlaylist: () -> Unit
 ) {
     val isFav = favorites.any { it.id == track.id }
+    var playerTab by remember { mutableStateOf("Música") } // "Música", "Letras", "Fila"
     
     // UI Layout do Reprodutor Expandido
     Box(
@@ -1343,6 +1477,35 @@ fun FullPlayerView(
                 }
             }
 
+            // Seleção de Abas do Player
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(ObsidianGray)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("Música", "Letras", "Fila").forEach { tab ->
+                    val isSelected = playerTab == tab
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) HorizonSunset else Color.Transparent)
+                            .clickable { playerTab = tab }
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = tab,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) Color.Black else TextMuted
+                        )
+                    }
+                }
+            }
+
             // Área de Capa / Visualizador de Acordo com Ajustes de Desempenho
             Box(
                 modifier = Modifier
@@ -1351,26 +1514,278 @@ fun FullPlayerView(
                     .padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (showCovers) {
-                    // Grande CD/Vinil giratório de alta fidelidade
-                    TrackCoverArt(
-                        track = track,
-                        showCovers = true,
-                        isPlaying = isPlaying,
-                        extremePerformanceMode = extremePerformanceMode,
+                if (playerTab == "Música") {
+                    if (showCovers) {
+                        // Grande CD/Vinil giratório de alta fidelidade
+                        TrackCoverArt(
+                            track = track,
+                            showCovers = true,
+                            isPlaying = isPlaying,
+                            extremePerformanceMode = extremePerformanceMode,
+                            modifier = Modifier
+                                .fillMaxWidth(0.8f)
+                                .aspectRatio(1f)
+                        )
+                    } else {
+                        // Procedural Canvas Horizon Sunset Visualizer (Máximo desempenho/fluidez)
+                        HorizonCanvasVisualizer(
+                            isPlaying = isPlaying,
+                            extremePerformanceMode = extremePerformanceMode,
+                            modifier = Modifier
+                                .fillMaxWidth(0.9f)
+                                .aspectRatio(1f)
+                        )
+                    }
+                } else if (playerTab == "Letras") {
+                    val lyrics by viewModel.currentTrackLyrics.collectAsState()
+                    var isEditingLyrics by remember { mutableStateOf(false) }
+                    var lyricsInputText by remember { mutableStateOf("") }
+
+                    if (isEditingLyrics) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { isEditingLyrics = false },
+                            title = { Text("Editar Letra", color = TextWhite) },
+                            text = {
+                                androidx.compose.material3.OutlinedTextField(
+                                    value = lyricsInputText,
+                                    onValueChange = { lyricsInputText = it },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(250.dp),
+                                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = TextWhite,
+                                        unfocusedTextColor = TextWhite,
+                                        focusedBorderColor = HorizonSunset,
+                                        unfocusedBorderColor = ObsidianGray
+                                    ),
+                                    placeholder = { Text("Cole ou digite a letra aqui...", color = TextMuted) }
+                                )
+                            },
+                            confirmButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = {
+                                        viewModel.saveTrackLyrics(track.id, lyricsInputText)
+                                        isEditingLyrics = false
+                                    }
+                                ) {
+                                    Text("Salvar", color = HorizonSunset)
+                                }
+                            },
+                            dismissButton = {
+                                androidx.compose.material3.TextButton(onClick = { isEditingLyrics = false }) {
+                                    Text("Cancelar", color = TextMuted)
+                                }
+                            },
+                            containerColor = ObsidianGray
+                        )
+                    }
+
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            .aspectRatio(1f)
-                    )
-                } else {
-                    // Procedural Canvas Horizon Sunset Visualizer (Máximo desempenho/fluidez)
-                    HorizonCanvasVisualizer(
-                        isPlaying = isPlaying,
-                        extremePerformanceMode = extremePerformanceMode,
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(ObsidianSlate)
+                            .padding(16.dp)
+                    ) {
+                        if (lyrics.isBlank()) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.EditNote,
+                                    contentDescription = null,
+                                    tint = HorizonSunset.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(64.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Nenhuma letra salva para esta música.",
+                                    color = TextMuted,
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = {
+                                        lyricsInputText = lyrics
+                                        isEditingLyrics = true
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = HorizonSunset),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("Adicionar Letra", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Letra da Música",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = HorizonSunset,
+                                        letterSpacing = 1.sp
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            lyricsInputText = lyrics
+                                            isEditingLyrics = true
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Edit,
+                                            contentDescription = "Editar letra",
+                                            tint = TextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    Text(
+                                        text = lyrics,
+                                        fontSize = 16.sp,
+                                        color = TextWhite,
+                                        lineHeight = 26.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (playerTab == "Fila") {
+                    val queue by viewModel.playerManager.queue.collectAsState()
+                    val queueIndex by viewModel.playerManager.currentIndex.collectAsState()
+
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .aspectRatio(1f)
-                    )
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(ObsidianSlate)
+                            .padding(12.dp)
+                    ) {
+                        if (queue.isEmpty()) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.QueueMusic,
+                                    contentDescription = null,
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "A fila está vazia",
+                                    color = TextMuted,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        } else {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                Text(
+                                    text = "Fila de Reprodução (${queue.size} faixas)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = HorizonSunset,
+                                    letterSpacing = 1.sp,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    itemsIndexed(queue) { index, item ->
+                                        val isCurrent = index == queueIndex
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (isCurrent) ObsidianGray else Color.Transparent)
+                                                .clickable { viewModel.playerManager.playTrack(item) }
+                                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Mini capa
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(ObsidianGray),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (showCovers && item.albumArt != null) {
+                                                    AsyncImage(
+                                                        model = item.albumArt,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.fillMaxSize(),
+                                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                                    )
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.MusicNote,
+                                                        contentDescription = null,
+                                                        tint = if (isCurrent) HorizonSunset else TextMuted,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = item.title,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isCurrent) HorizonSunset else TextWhite,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = item.artist,
+                                                    fontSize = 11.sp,
+                                                    color = if (isCurrent) HorizonGold else TextMuted,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            if (isCurrent) {
+                                                Text(
+                                                    text = "Tocando",
+                                                    color = HorizonSunset,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(end = 4.dp)
+                                                )
+                                            } else {
+                                                Text(
+                                                    text = formatDuration(item.duration),
+                                                    color = TextMuted,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

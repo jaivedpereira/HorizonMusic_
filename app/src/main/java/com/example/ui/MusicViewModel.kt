@@ -154,9 +154,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _currentTrackLyrics = MutableStateFlow("")
+    val currentTrackLyrics: StateFlow<String> = _currentTrackLyrics.asStateFlow()
+
     init {
         // Tenta escanear inicialmente (o app lidará com permissão na UI)
         scanLocalAudio()
+
+        // Observa mudanças de faixa para carregar as letras automaticamente
+        viewModelScope.launch {
+            playerManager.currentTrack.collect { track ->
+                if (track != null) {
+                    _currentTrackLyrics.value = getTrackLyrics(track.id)
+                } else {
+                    _currentTrackLyrics.value = ""
+                }
+            }
+        }
     }
 
     // Atualiza a configuração de mostrar capas de músicas
@@ -342,6 +356,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _selectedPlaylistId.value = playlistId
     }
 
+    fun updatePlaylistCover(playlistId: Long, coverUri: String?) {
+        viewModelScope.launch {
+            dao.updatePlaylistCover(playlistId, coverUri)
+        }
+    }
+
     fun addTrackToPlaylist(playlistId: Long, track: Track) {
         viewModelScope.launch {
             dao.insertPlaylistTrack(track.toPlaylistTrackEntity(playlistId))
@@ -369,6 +389,25 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun isFavorite(trackId: String): Flow<Boolean> = flow {
         emit(dao.isFavorite(trackId))
     }.flowOn(Dispatchers.IO)
+
+    fun renamePlaylist(playlistId: Long, newName: String) {
+        viewModelScope.launch {
+            dao.updatePlaylistName(playlistId, newName)
+        }
+    }
+
+    fun saveTrackLyrics(trackId: String, lyrics: String) {
+        val lyricsPrefs = getApplication<Application>().getSharedPreferences("horizon_lyrics", Context.MODE_PRIVATE)
+        lyricsPrefs.edit().putString(trackId, lyrics).apply()
+        if (playerManager.currentTrack.value?.id == trackId) {
+            _currentTrackLyrics.value = lyrics
+        }
+    }
+
+    fun getTrackLyrics(trackId: String): String {
+        val lyricsPrefs = getApplication<Application>().getSharedPreferences("horizon_lyrics", Context.MODE_PRIVATE)
+        return lyricsPrefs.getString(trackId, "") ?: ""
+    }
 
     override fun onCleared() {
         super.onCleared()

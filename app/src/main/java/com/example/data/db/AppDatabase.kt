@@ -42,7 +42,8 @@ data class Track(
 data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val coverUri: String? = null
 )
 
 @Entity(
@@ -103,6 +104,12 @@ interface MusicDao {
     @Query("DELETE FROM playlists WHERE id = :playlistId")
     suspend fun deletePlaylist(playlistId: Long)
 
+    @Query("UPDATE playlists SET coverUri = :coverUri WHERE id = :playlistId")
+    suspend fun updatePlaylistCover(playlistId: Long, coverUri: String?)
+
+    @Query("UPDATE playlists SET name = :newName WHERE id = :playlistId")
+    suspend fun updatePlaylistName(playlistId: Long, newName: String)
+
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId")
     fun getTracksForPlaylist(playlistId: Long): Flow<List<PlaylistTrackEntity>>
 
@@ -131,7 +138,7 @@ interface MusicDao {
 // Banco de Dados
 @Database(
     entities = [PlaylistEntity::class, PlaylistTrackEntity::class, FavoriteTrackEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -147,7 +154,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "horizon_music_db"
-                ).build()
+                ).fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance
             }
