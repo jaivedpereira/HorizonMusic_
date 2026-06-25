@@ -234,6 +234,17 @@ class MusicPlayerManager(private val context: Context) {
         }
     }
 
+    fun pause() {
+        val mp = mediaPlayer ?: return
+        if (mp.isPlaying) {
+            mp.pause()
+            _isPlaying.value = false
+            updateMediaSessionState()
+            updateServiceAndNotification()
+            stopProgressPolling()
+        }
+    }
+
     fun togglePlayPause() {
         val mp = mediaPlayer ?: return
         if (mp.isPlaying) {

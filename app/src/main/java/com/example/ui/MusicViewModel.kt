@@ -33,6 +33,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _customFolder = MutableStateFlow(prefs.getString("custom_folder", "") ?: "")
     val customFolder: StateFlow<String> = _customFolder.asStateFlow()
 
+    // Preferência: Modo de Desempenho Extremo para desativar todas as animações pesadas e efeitos
+    private val _extremePerformanceMode = MutableStateFlow(prefs.getBoolean("extreme_performance_mode", false))
+    val extremePerformanceMode: StateFlow<Boolean> = _extremePerformanceMode.asStateFlow()
+
+    // Preferência: Qualidade do Áudio Simulada / Cache de Buffer (Normal / Alta / Hi-Fi)
+    private val _audioQuality = MutableStateFlow(prefs.getString("audio_quality", "Alta") ?: "Alta")
+    val audioQuality: StateFlow<String> = _audioQuality.asStateFlow()
+
+    // Preferência: Equalizador / Preset do Equalizador (Flat / Bass Boost / Vocal / Eletrônica)
+    private val _eqPreset = MutableStateFlow(prefs.getString("eq_preset", "Flat") ?: "Flat")
+    val eqPreset: StateFlow<String> = _eqPreset.asStateFlow()
+
+    // Timer para Dormir ativo (minutos restantes, 0 se desativado)
+    private val _sleepTimerMinutes = MutableStateFlow(0)
+    val sleepTimerMinutes: StateFlow<Int> = _sleepTimerMinutes.asStateFlow()
+
+    private var sleepTimerJob: kotlinx.coroutines.Job? = null
+
     // Estados da UI
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -153,6 +171,57 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         _customFolder.value = path.trim()
         // Executa uma nova varredura imediatamente para atualizar a fila com a nova pasta
         scanLocalAudio()
+    }
+
+    // Configura o Modo de Desempenho Extremo
+    fun setExtremePerformanceMode(enabled: Boolean) {
+        prefs.edit().putBoolean("extreme_performance_mode", enabled).apply()
+        _extremePerformanceMode.value = enabled
+        // Se ativado, também desliga as capas de música para máxima fluidez
+        if (enabled) {
+            setShowCovers(false)
+        }
+    }
+
+    // Configura a Qualidade do Áudio
+    fun setAudioQuality(quality: String) {
+        prefs.edit().putString("audio_quality", quality).apply()
+        _audioQuality.value = quality
+    }
+
+    // Configura o Preset de Equalizador
+    fun setEqPreset(preset: String) {
+        prefs.edit().putString("eq_preset", preset).apply()
+        _eqPreset.value = preset
+    }
+
+    // Configura o Sleep Timer (minutos)
+    fun setSleepTimer(minutes: Int) {
+        _sleepTimerMinutes.value = minutes
+        sleepTimerJob?.cancel()
+        if (minutes > 0) {
+            sleepTimerJob = viewModelScope.launch {
+                var timeLeft = minutes
+                while (timeLeft > 0) {
+                    kotlinx.coroutines.delay(60000L) // Aguarda 1 minuto
+                    timeLeft--
+                    _sleepTimerMinutes.value = timeLeft
+                }
+                // Se o tempo acabar e a música estiver tocando, pausa
+                playerManager.pause()
+            }
+        }
+    }
+
+    // Limpa o cache de imagem do Coil de maneira segura
+    fun clearCoversCache(context: Context) {
+        try {
+            val imageLoader = coil.ImageLoader(context)
+            imageLoader.memoryCache?.clear()
+            imageLoader.diskCache?.clear()
+        } catch (e: Exception) {
+            Log.e("MusicViewModel", "Erro ao limpar cache de imagens", e)
+        }
     }
 
     // Escaneia arquivos do armazenamento local

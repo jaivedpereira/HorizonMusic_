@@ -19,8 +19,47 @@ import kotlin.math.sin
 @Composable
 fun HorizonCanvasVisualizer(
     isPlaying: Boolean,
+    extremePerformanceMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    if (extremePerformanceMode) {
+        Canvas(modifier = modifier) {
+            val width = size.width
+            val height = size.height
+            val centerX = width / 2f
+            val centerY = height / 2f
+            
+            // Desenha apenas o círculo do sol estático e a linha de horizonte
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(TwilightGlow.copy(alpha = 0.12f), Color.Transparent),
+                    center = Offset(centerX, centerY),
+                    radius = width * 0.4f
+                ),
+                radius = width * 0.4f,
+                center = Offset(centerX, centerY)
+            )
+
+            drawCircle(
+                brush = Brush.linearGradient(
+                    colors = listOf(HorizonSunset, HorizonSunset.copy(alpha = 0.3f)),
+                    start = Offset(centerX, centerY - width * 0.23f),
+                    end = Offset(centerX, centerY + width * 0.23f)
+                ),
+                radius = width * 0.23f,
+                center = Offset(centerX, centerY)
+            )
+
+            drawLine(
+                color = Color.White.copy(alpha = 0.3f),
+                start = Offset(width * 0.1f, centerY + 10f),
+                end = Offset(width * 0.9f, centerY + 10f),
+                strokeWidth = 1.5.dp.toPx()
+            )
+        }
+        return
+    }
+
     // Transições animadas para criar as ondas fluídas do visualizador
     val infiniteTransition = rememberInfiniteTransition(label = "visualizer_waves")
     
@@ -156,10 +195,39 @@ private fun twinPulseSpec(isPlaying: Boolean): DurationBasedAnimationSpec<Float>
 @Composable
 fun SimpleBarVisualizer(
     isPlaying: Boolean,
+    extremePerformanceMode: Boolean = false,
     modifier: Modifier = Modifier,
     barCount: Int = 12,
     barColor: Color = HorizonSunset
 ) {
+    if (extremePerformanceMode) {
+        Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            val staticHeights = listOf(0.3f, 0.6f, 0.45f, 0.2f)
+            repeat(barCount) { index ->
+                val heightPercent = staticHeights[index % staticHeights.size]
+                Canvas(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    val barWidth = size.width
+                    val maxBarHeight = size.height
+                    val barHeight = maxBarHeight * heightPercent
+                    
+                    drawRect(
+                        color = barColor,
+                        topLeft = Offset(0f, maxBarHeight - barHeight),
+                        size = Size(barWidth, barHeight)
+                    )
+                }
+            }
+        }
+        return
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "bars")
     
     // Lista de animações para cada barra para simular frequências de áudio

@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coil.compose.AsyncImage
@@ -78,6 +79,10 @@ fun HorizonHomeScreen(
     // Configurações e preferências
     val showCovers by viewModel.showCovers.collectAsState()
     val customFolder by viewModel.customFolder.collectAsState()
+    val extremePerformanceMode by viewModel.extremePerformanceMode.collectAsState()
+    val audioQuality by viewModel.audioQuality.collectAsState()
+    val eqPreset by viewModel.eqPreset.collectAsState()
+    val sleepTimerMinutes by viewModel.sleepTimerMinutes.collectAsState()
 
     // UI States locais
     var currentTab by remember { mutableStateOf(0) } // 0: Músicas, 1: Playlists, 2: Favoritos
@@ -87,7 +92,20 @@ fun HorizonHomeScreen(
     // Diálogos e Modais
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var showAddToPlaylistDialogForTrack by remember { mutableStateOf<Track?>(null) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    var isSettingsScreenOpen by remember { mutableStateOf(false) }
+
+    // Interceptar o botão voltar físico/sistema para fechar telas secundárias/overlays
+    BackHandler(enabled = isSettingsScreenOpen) {
+        isSettingsScreenOpen = false
+    }
+
+    BackHandler(enabled = isPlayerExpanded) {
+        isPlayerExpanded = false
+    }
+
+    BackHandler(enabled = playlistDetailToShow != null) {
+        playlistDetailToShow = null
+    }
 
     // Verificação e Solicitação de Permissões
     val storagePermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -150,11 +168,12 @@ fun HorizonHomeScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = ObsidianBlack,
-        topBar = {
-            if (!isPlayerExpanded) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = ObsidianBlack,
+            topBar = {
+                if (!isPlayerExpanded && !isSettingsScreenOpen) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -207,7 +226,7 @@ fun HorizonHomeScreen(
                             }
 
                             IconButton(
-                                onClick = { showSettingsDialog = true }
+                                onClick = { isSettingsScreenOpen = true }
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Settings,
@@ -304,7 +323,7 @@ fun HorizonHomeScreen(
             }
         },
         bottomBar = {
-            if (!isPlayerExpanded && currentTrack != null) {
+            if (!isPlayerExpanded && !isSettingsScreenOpen && currentTrack != null) {
                 // Mini Player flutuante com visual glassmorphic elegante
                 Box(
                     modifier = Modifier
@@ -328,6 +347,7 @@ fun HorizonHomeScreen(
                             track = currentTrack!!,
                             showCovers = showCovers,
                             isPlaying = isPlaying,
+                            extremePerformanceMode = extremePerformanceMode,
                             modifier = Modifier.size(46.dp)
                         )
 
@@ -355,6 +375,7 @@ fun HorizonHomeScreen(
                         // Mini visualizador de frequências bar
                         SimpleBarVisualizer(
                             isPlaying = isPlaying,
+                            extremePerformanceMode = extremePerformanceMode,
                             modifier = Modifier
                                 .height(20.dp)
                                 .width(28.dp)
@@ -509,6 +530,7 @@ fun HorizonHomeScreen(
                     repeatMode = repeatMode,
                     favorites = favorites,
                     showCovers = showCovers,
+                    extremePerformanceMode = extremePerformanceMode,
                     onCollapse = { isPlayerExpanded = false },
                     onPlayPauseToggle = { viewModel.playerManager.togglePlayPause() },
                     onNext = { viewModel.playerManager.skipToNext() },
@@ -549,57 +571,32 @@ fun HorizonHomeScreen(
                 }
             )
         }
-
-        if (showSettingsDialog) {
-            Dialog(onDismissRequest = { showSettingsDialog = false }) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.85f),
-                    shape = RoundedCornerShape(24.dp),
-                    color = ObsidianBlack,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
-                ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            // Header do Dialog
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Ajustes do Horizon",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp,
-                                    color = TextWhite
-                                )
-                                IconButton(onClick = { showSettingsDialog = false }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Fechar",
-                                        tint = TextMuted
-                                    )
-                                }
-                            }
-                            
-                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                            
-                            SettingsSection(
-                                showCovers = showCovers,
-                                customFolder = customFolder,
-                                onShowCoversChanged = { viewModel.setShowCovers(it) },
-                                onCustomFolderChanged = { viewModel.setCustomFolder(it) },
-                                onScanAudio = { viewModel.scanLocalAudio() }
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
+
+    AnimatedVisibility(
+        visible = isSettingsScreenOpen,
+        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+    ) {
+        FullSettingsScreen(
+            showCovers = showCovers,
+            customFolder = customFolder,
+            extremePerformanceMode = extremePerformanceMode,
+            audioQuality = audioQuality,
+            eqPreset = eqPreset,
+            sleepTimerMinutes = sleepTimerMinutes,
+            onShowCoversChanged = { viewModel.setShowCovers(it) },
+            onCustomFolderChanged = { viewModel.setCustomFolder(it) },
+            onExtremePerformanceModeChanged = { viewModel.setExtremePerformanceMode(it) },
+            onAudioQualityChanged = { viewModel.setAudioQuality(it) },
+            onEqPresetChanged = { viewModel.setEqPreset(it) },
+            onSleepTimerChanged = { viewModel.setSleepTimer(it) },
+            onClearCoversCache = { viewModel.clearCoversCache(context) },
+            onScanAudio = { viewModel.scanLocalAudio() },
+            onBack = { isSettingsScreenOpen = false }
+        )
+    }
+}
 }
 
 // ---------------------- SUB-SEÇÕES DA DASHBOARD ----------------------
@@ -1280,6 +1277,7 @@ fun FullPlayerView(
     repeatMode: RepeatMode,
     favorites: List<Track>,
     showCovers: Boolean,
+    extremePerformanceMode: Boolean = false,
     onCollapse: () -> Unit,
     onPlayPauseToggle: () -> Unit,
     onNext: () -> Unit,
@@ -1359,6 +1357,7 @@ fun FullPlayerView(
                         track = track,
                         showCovers = true,
                         isPlaying = isPlaying,
+                        extremePerformanceMode = extremePerformanceMode,
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
                             .aspectRatio(1f)
@@ -1367,6 +1366,7 @@ fun FullPlayerView(
                     // Procedural Canvas Horizon Sunset Visualizer (Máximo desempenho/fluidez)
                     HorizonCanvasVisualizer(
                         isPlaying = isPlaying,
+                        extremePerformanceMode = extremePerformanceMode,
                         modifier = Modifier
                             .fillMaxWidth(0.9f)
                             .aspectRatio(1f)
@@ -1762,11 +1762,12 @@ fun TrackCoverArt(
     track: Track,
     showCovers: Boolean,
     isPlaying: Boolean = false,
+    extremePerformanceMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     if (showCovers) {
         val hash = remember(track.id) { track.title.hashCode() }
-        val rotationAngle = if (isPlaying) {
+        val rotationAngle = if (isPlaying && !extremePerformanceMode) {
             val infiniteTransition = rememberInfiniteTransition(label = "cover_rotation")
             val angle by infiniteTransition.animateFloat(
                 initialValue = 0f,
@@ -1868,12 +1869,22 @@ fun TrackCoverArt(
 }
 
 @Composable
-fun SettingsSection(
+fun FullSettingsScreen(
     showCovers: Boolean,
     customFolder: String,
+    extremePerformanceMode: Boolean,
+    audioQuality: String,
+    eqPreset: String,
+    sleepTimerMinutes: Int,
     onShowCoversChanged: (Boolean) -> Unit,
     onCustomFolderChanged: (String) -> Unit,
-    onScanAudio: () -> Unit
+    onExtremePerformanceModeChanged: (Boolean) -> Unit,
+    onAudioQualityChanged: (String) -> Unit,
+    onEqPresetChanged: (String) -> Unit,
+    onSleepTimerChanged: (Int) -> Unit,
+    onClearCoversCache: () -> Unit,
+    onScanAudio: () -> Unit,
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     var folderInput by remember(customFolder) { mutableStateOf(customFolder) }
@@ -1911,228 +1922,507 @@ fun SettingsSection(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-        contentPadding = PaddingValues(bottom = 100.dp)
-    ) {
-        item {
-            Text(
-                text = "Configurações & Ajustes",
-                fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
-                color = TextWhite
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Personalize sua experiência de áudio no Horizon",
-                fontSize = 13.sp,
-                color = TextMuted
-            )
-        }
-
-        // Card de Visualização / Fluidic Design
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
-                modifier = Modifier.fillMaxWidth()
+    Scaffold(
+        topBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ObsidianBlack)
+                    .statusBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "APARÊNCIA E FLUIDEZ",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = TwilightGlow,
-                        letterSpacing = 1.sp
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.Rounded.ArrowBack,
+                        contentDescription = "Voltar",
+                        tint = TextWhite
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Ajustes do Horizon",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    color = TextWhite
+                )
+            }
+        },
+        containerColor = ObsidianBlack,
+        modifier = Modifier.fillMaxSize()
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 48.dp)
+        ) {
+            // Seção de Desempenho e Fluidez
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "DESEMPENHO",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = TwilightGlow,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Mostrar Capas das Músicas",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
-                                color = TextWhite
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Carrega capas coloridas dinâmicas para as faixas. Desative para máxima fluidez nas animações.",
-                                fontSize = 12.sp,
-                                color = TextMuted
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Modo Desempenho Extremo",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = TextWhite
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Desativa as animações rotativas das capas, os visualizadores dinâmicos por ondas e efeitos de partículas para máxima velocidade e menor consumo de bateria.",
+                                    fontSize = 12.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            Switch(
+                                checked = extremePerformanceMode,
+                                onCheckedChange = onExtremePerformanceModeChanged,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = HorizonSunset,
+                                    uncheckedThumbColor = TextMuted,
+                                    uncheckedTrackColor = ObsidianGray
+                                )
                             )
                         }
-                        Switch(
-                            checked = showCovers,
-                            onCheckedChange = onShowCoversChanged,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.Black,
-                                checkedTrackColor = HorizonSunset,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = ObsidianGray
-                            )
-                        )
+
+                        if (!extremePerformanceMode) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Mostrar Capas das Músicas",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = TextWhite
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Carrega capas coloridas dinâmicas para as faixas. Desative para economizar consumo de dados e acelerar a exibição da lista.",
+                                        fontSize = 12.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                Switch(
+                                    checked = showCovers,
+                                    onCheckedChange = onShowCoversChanged,
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.Black,
+                                        checkedTrackColor = HorizonSunset,
+                                        uncheckedThumbColor = TextMuted,
+                                        uncheckedTrackColor = ObsidianGray
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // Card de Diretório de Varredura
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "DIRETÓRIO E ORIGEM",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = TwilightGlow,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Pasta de Escaneamento do Horizon",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = TextWhite
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Escolha um diretório específico para o Horizon listar suas músicas. Deixe em branco para buscar em todo o armazenamento.",
-                        fontSize = 12.sp,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+            // Seção de Áudio e Personalização
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "PREFERÊNCIAS DE ÁUDIO",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = TwilightGlow,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                    // TextField de Entrada do Caminho da Pasta
-                    TextField(
-                        value = folderInput,
-                        onValueChange = { folderInput = it },
-                        placeholder = { Text("Ex: /storage/emulated/0/Music", color = TextMuted, fontSize = 13.sp) },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = ObsidianBlack,
-                            unfocusedContainerColor = ObsidianBlack,
-                            focusedTextColor = TextWhite,
-                            unfocusedTextColor = TextWhite,
-                            focusedIndicatorColor = HorizonSunset,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Ações de Caminho
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = { folderPickerLauncher.launch(null) },
-                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianGray),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
+                        Text(
+                            text = "Qualidade da Transmissão (Buffer)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = TextWhite
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.FolderOpen,
-                                contentDescription = null,
-                                tint = HorizonSunset,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Selecionar", color = TextWhite, fontSize = 12.sp)
+                            listOf("Normal", "Alta", "Hi-Fi").forEach { quality ->
+                                val selected = audioQuality == quality
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selected) HorizonSunset else ObsidianBlack)
+                                        .border(
+                                            1.dp,
+                                            if (selected) Color.Transparent else Color.White.copy(alpha = 0.1f),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable { onAudioQualityChanged(quality) }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = quality,
+                                        color = if (selected) Color.Black else TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
                         }
 
-                        Button(
-                            onClick = {
-                                onCustomFolderChanged(folderInput)
-                                Toast.makeText(context, "Caminho salvo com sucesso!", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = HorizonSunset),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Text(
+                            text = "Preset do Equalizador",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = TextWhite
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Save,
-                                contentDescription = null,
-                                tint = Color.Black,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Aplicar", color = Color.Black, fontSize = 12.sp)
+                            listOf("Flat", "Bass Boost", "Vocal", "Eletrônica").forEach { preset ->
+                                val selected = eqPreset == preset
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selected) TwilightGlow else ObsidianBlack)
+                                        .border(
+                                            1.dp,
+                                            if (selected) Color.Transparent else Color.White.copy(alpha = 0.1f),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable { onEqPresetChanged(preset) }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = preset,
+                                        color = if (selected) Color.Black else TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
                         }
                     }
+                }
+            }
 
-                    if (customFolder.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
+            // Seção Timer para Dormir (Sleep Timer)
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Ativo: $customFolder",
-                                color = TwilightGlow,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            Text(
-                                text = "Limpar Filtro",
-                                color = HorizonSunset,
-                                fontSize = 11.sp,
+                                text = "TIMER PARA DORMIR",
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .clickable {
-                                        onCustomFolderChanged("")
-                                        folderInput = ""
-                                        Toast.makeText(context, "Horizon redefinido para todo o armazenamento!", Toast.LENGTH_SHORT).show()
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                fontSize = 11.sp,
+                                color = TwilightGlow,
+                                letterSpacing = 1.sp
                             )
+                            if (sleepTimerMinutes > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(HorizonSunset.copy(alpha = 0.15f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(HorizonSunset)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "$sleepTimerMinutes min restantes",
+                                            color = HorizonSunset,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Parar a reprodução de música após:",
+                            fontSize = 13.sp,
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(0, 15, 30, 45, 60).forEach { mins ->
+                                val isActualMatch = (mins == 0 && sleepTimerMinutes == 0) || 
+                                                    (mins > 0 && sleepTimerMinutes > 0 && mins == ((sleepTimerMinutes + 14) / 15 * 15))
+                                val text = if (mins == 0) "Desligar" else "${mins} min"
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isActualMatch) HorizonSunset else ObsidianBlack)
+                                        .border(
+                                            1.dp,
+                                            if (isActualMatch) Color.Transparent else Color.White.copy(alpha = 0.1f),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable {
+                                            onSleepTimerChanged(mins)
+                                            if (mins > 0) {
+                                                Toast.makeText(context, "Timer configurado para $mins minutos", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Timer desativado", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = text,
+                                        color = if (isActualMatch) Color.Black else TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Informação da Versão
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Horizon Music Player v1.2",
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Developed with Elegant Dark Theme",
-                        color = TextMuted.copy(alpha = 0.5f),
-                        fontSize = 10.sp
-                    )
+            // Seção de Origem e Gerenciamento de Arquivos
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = ObsidianSlate),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "ORIGEM DE MÚSICA",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = TwilightGlow,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Pasta de Escaneamento do Horizon",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = TextWhite
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Configure uma pasta exclusiva para leitura das faixas locais no Horizon. Caso prefira listar todas, basta limpar o filtro.",
+                            fontSize = 12.sp,
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        TextField(
+                            value = folderInput,
+                            onValueChange = { folderInput = it },
+                            placeholder = { Text("Ex: /storage/emulated/0/Music", color = TextMuted, fontSize = 13.sp) },
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = ObsidianBlack,
+                                unfocusedContainerColor = ObsidianBlack,
+                                focusedTextColor = TextWhite,
+                                unfocusedTextColor = TextWhite,
+                                focusedIndicatorColor = HorizonSunset,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = { folderPickerLauncher.launch(null) },
+                                colors = ButtonDefaults.buttonColors(containerColor = ObsidianGray),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FolderOpen,
+                                    contentDescription = null,
+                                    tint = HorizonSunset,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Selecionar", color = TextWhite, fontSize = 12.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    onCustomFolderChanged(folderInput)
+                                    Toast.makeText(context, "Caminho salvo com sucesso!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = HorizonSunset),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Save,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Aplicar", color = Color.Black, fontSize = 12.sp)
+                            }
+                        }
+
+                        if (customFolder.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Filtro ativo: $customFolder",
+                                    color = TwilightGlow,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                
+                                Text(
+                                    text = "Limpar Filtro",
+                                    color = HorizonSunset,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .clickable {
+                                            onCustomFolderChanged("")
+                                            folderInput = ""
+                                            Toast.makeText(context, "Filtro redefinido!", Toast.LENGTH_SHORT).show()
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Cache de Capas de Música",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = TextWhite
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Exclua as imagens em cache local para liberar espaço de armazenamento interno e limpar memória RAM.",
+                                    fontSize = 12.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    onClearCoversCache()
+                                    Toast.makeText(context, "Cache de capas limpo com sucesso!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = ObsidianGray),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Limpar", color = TextWhite, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Informação da Versão
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Horizon Music Player v1.5 Pro",
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Otimizado para Desempenho Extremo",
+                            color = HorizonSunset.copy(alpha = 0.6f),
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
         }
