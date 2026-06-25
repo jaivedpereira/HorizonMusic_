@@ -11,6 +11,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coil.compose.AsyncImage
+import android.content.Context
+import androidx.compose.ui.layout.ContentScale
+import com.example.ui.OnlineTrack
+import com.example.ui.DownloadState
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -287,10 +291,12 @@ fun HorizonHomeScreen(
 
                     // Navegação por abas customizada (Pills)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        listOf("Músicas", "Playlists", "Favoritos").forEachIndexed { index, title ->
+                        listOf("Músicas", "Playlists", "Favoritos", "Busca On-line").forEachIndexed { index, title ->
                             val selected = currentTab == index
                             val bgValue by animateColorAsState(
                                 targetValue = if (selected) HorizonSunset else ObsidianSlate,
@@ -304,7 +310,6 @@ fun HorizonHomeScreen(
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .weight(1f)
                                     .height(40.dp)
                                     .clip(RoundedCornerShape(20.dp))
                                     .background(bgValue)
@@ -312,6 +317,7 @@ fun HorizonHomeScreen(
                                         currentTab = index
                                         playlistDetailToShow = null // Reseta detalhes de playlist ao mudar de aba
                                     }
+                                    .padding(horizontal = 20.dp)
                             ) {
                                 Text(
                                     text = title,
@@ -506,6 +512,13 @@ fun HorizonHomeScreen(
                         onToggleFavorite = { viewModel.toggleFavorite(it) },
                         onExploreClick = { currentTab = 0 },
                         onAddToPlaylist = { showAddToPlaylistDialogForTrack = it }
+                    )
+                }
+                3 -> {
+                    // ABA BUSCA ON-LINE (PIPED & YOUTUBE MUSIC-LIKE DESIGN)
+                    OnlineSearchSection(
+                        viewModel = viewModel,
+                        context = context
                     )
                 }
             }
@@ -2851,4 +2864,636 @@ fun formatDuration(durationMs: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%02d:%02d", minutes, seconds)
+}
+
+@Composable
+fun OnlineSearchSection(
+    viewModel: MusicViewModel,
+    context: Context
+) {
+    val query by viewModel.onlineSearchQuery.collectAsState()
+    val results by viewModel.onlineSearchResults.collectAsState()
+    val isSearching by viewModel.isSearchingOnline.collectAsState()
+    val searchError by viewModel.searchOnlineError.collectAsState()
+    val downloadStates by viewModel.downloadStates.collectAsState()
+    val downloadProgresses by viewModel.downloadProgresses.collectAsState()
+
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        // Campo de Entrada para Pesquisa On-line com botão de ação
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextField(
+                value = query,
+                onValueChange = { viewModel.updateOnlineSearchQuery(it) },
+                placeholder = { Text("Música, artista ou gênero...", color = TextMuted, fontSize = 14.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Language,
+                        contentDescription = "Busca Global",
+                        tint = HorizonSunset
+                    )
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { 
+                            viewModel.updateOnlineSearchQuery("") 
+                            viewModel.searchOnline("")
+                        }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Limpar",
+                                tint = TextMuted
+                            )
+                        }
+                    }
+                },
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = ObsidianSlate,
+                    unfocusedContainerColor = ObsidianSlate,
+                    disabledContainerColor = ObsidianSlate,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    focusedTextColor = TextWhite,
+                    unfocusedTextColor = TextWhite
+                ),
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(52.dp)
+                    .testTag("online_search_input")
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Button(
+                onClick = { 
+                    viewModel.searchOnline(query) 
+                    keyboardController?.hide()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = HorizonSunset),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .height(52.dp)
+                    .testTag("online_search_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "Buscar",
+                    tint = Color.Black
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Horizontally Scrollable Genre Chips (Quick Search)
+        val genres = listOf(
+            "Sertanejo" to "🤠",
+            "Pop Nacional" to "🇧🇷",
+            "Lofi Beats" to "☕",
+            "Rock Hits" to "🎸",
+            "Eletrônica" to "⚡",
+            "Hip Hop" to "🎤",
+            "Funk Remix" to "🔥",
+            "Anos 80" to "📼"
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            genres.forEach { (genre, emoji) ->
+                val isSelected = query.lowercase() == genre.lowercase()
+                val bgValue by animateColorAsState(
+                    targetValue = if (isSelected) HorizonSunset else ObsidianSlate,
+                    label = "chipBg"
+                )
+                val textValue by animateColorAsState(
+                    targetValue = if (isSelected) Color.Black else TextWhite,
+                    label = "chipText"
+                )
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(bgValue)
+                        .clickable {
+                            viewModel.updateOnlineSearchQuery(genre)
+                            viewModel.searchOnline(genre)
+                            keyboardController?.hide()
+                        }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = emoji, fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = genre,
+                        color = textValue,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Exibição dos resultados ou estados
+        if (isSearching) {
+            // Skeleton Loader Animado - Super premium e fluido!
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Buscando rotas seguras...",
+                    color = HorizonGold,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+                repeat(6) {
+                    OnlineTrackSkeletonItem()
+                }
+            }
+        } else if (searchError != null && results.isEmpty()) {
+            // Estado de Erro
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CloudOff,
+                    contentDescription = null,
+                    tint = Color.Red,
+                    modifier = Modifier.size(64.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "A conexão com o servidor Piped falhou.",
+                    color = TextWhite,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Iniciamos automaticamente a estação de streaming offline.",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = { viewModel.searchOnline(query.ifEmpty { "Pop" }) },
+                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianSlate),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Tentar Reconectar", color = TextWhite)
+                }
+            }
+        } else {
+            val isInitialState = query.isEmpty() && results.isEmpty()
+            val listToDisplay = if (isInitialState) {
+                com.example.ui.TRENDING_TRACKS
+            } else {
+                results
+            }
+
+            if (listToDisplay.isEmpty()) {
+                // Estado: Lista Vazia
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MusicOff,
+                        contentDescription = null,
+                        tint = TextMuted,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Nenhum resultado encontrado.",
+                        color = TextMuted,
+                        fontSize = 15.sp
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (isInitialState) {
+                        // CAROUSEL DE DESTAQUES (YOUTUBE STYLE)
+                        item {
+                            Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Músicas em Destaque 🔥",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = HorizonSunset,
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                    Text(
+                                        text = "Toque para ouvir online",
+                                        fontSize = 11.sp,
+                                        color = TextMuted
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    listToDisplay.forEach { track ->
+                                        val state = downloadStates[track.id] ?: DownloadState.Idle
+                                        val progress = downloadProgresses[track.id] ?: 0f
+
+                                        Card(
+                                            modifier = Modifier
+                                                .width(150.dp)
+                                                .height(210.dp)
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .clickable {
+                                                    viewModel.playOnlineTrack(track, context)
+                                                },
+                                            colors = CardDefaults.cardColors(containerColor = ObsidianSlate)
+                                        ) {
+                                            Box(modifier = Modifier.fillMaxSize()) {
+                                                Column {
+                                                    // Thumbnail
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(115.dp)
+                                                            .background(ObsidianGray)
+                                                    ) {
+                                                        AsyncImage(
+                                                            model = track.thumbnail,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.fillMaxSize(),
+                                                            contentScale = ContentScale.Crop
+                                                        )
+                                                        // Circular Play Badge
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(32.dp)
+                                                                .align(Alignment.Center)
+                                                                .clip(CircleShape)
+                                                                .background(Color.Black.copy(alpha = 0.6f)),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.PlayArrow,
+                                                                contentDescription = "Ouvir",
+                                                                tint = HorizonSunset,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                    }
+
+                                                    // Text Details
+                                                    Column(modifier = Modifier.padding(10.dp)) {
+                                                        Text(
+                                                            text = track.title,
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = TextWhite,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Text(
+                                                            text = track.artist,
+                                                            fontSize = 10.sp,
+                                                            color = TextMuted,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                }
+
+                                                // Floating Download Button on Bottom Right
+                                                Box(
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomEnd)
+                                                        .padding(8.dp)
+                                                        .size(36.dp)
+                                                        .clip(CircleShape)
+                                                        .background(ObsidianGray.copy(alpha = 0.9f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    when (state) {
+                                                        is DownloadState.Idle -> {
+                                                            IconButton(
+                                                                onClick = {
+                                                                    viewModel.downloadOnlineTrack(track, context)
+                                                                    Toast.makeText(context, "Iniciando download...", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.Download,
+                                                                    contentDescription = "Baixar",
+                                                                    tint = HorizonSunset,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                        is DownloadState.FetchingStream -> {
+                                                            CircularProgressIndicator(
+                                                                color = HorizonGold,
+                                                                strokeWidth = 2.dp,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                        }
+                                                        is DownloadState.Downloading -> {
+                                                            CircularProgressIndicator(
+                                                                progress = { progress },
+                                                                color = HorizonSunset,
+                                                                strokeWidth = 2.dp,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                        is DownloadState.Success -> {
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.CheckCircle,
+                                                                contentDescription = "Baixado",
+                                                                tint = Color.Green,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                        }
+                                                        is DownloadState.Error -> {
+                                                            IconButton(
+                                                                onClick = {
+                                                                    viewModel.downloadOnlineTrack(track, context)
+                                                                }
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.Error,
+                                                                    contentDescription = "Erro",
+                                                                    tint = Color.Red,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text(
+                                text = "Estação de Streaming & Busca",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = HorizonSunset,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
+
+                    items(listToDisplay) { track ->
+                        val state = downloadStates[track.id] ?: DownloadState.Idle
+                        val progress = downloadProgresses[track.id] ?: 0f
+
+                        // Row item stylizado
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(ObsidianSlate)
+                                .clickable {
+                                    viewModel.playOnlineTrack(track, context)
+                                }
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Miniatura do Vídeo/Música (Cover art)
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ObsidianGray),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AsyncImage(
+                                    model = track.thumbnail,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                                // Pulsing hover play icon overlay
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.35f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = "Ouvir",
+                                        tint = HorizonSunset,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(14.dp))
+
+                            // Título e Autor
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = track.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextWhite,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Custom online streamer tag
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(HorizonSunset.copy(alpha = 0.15f))
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "ONLINE",
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = HorizonSunset
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = track.artist,
+                                        fontSize = 12.sp,
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // Botão / Estado de Download Lateral
+                            Box(
+                                modifier = Modifier.size(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                when (state) {
+                                    is DownloadState.Idle -> {
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.downloadOnlineTrack(track, context)
+                                                Toast.makeText(context, "Iniciando download...", Toast.LENGTH_SHORT).show()
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Download,
+                                                contentDescription = "Baixar Música",
+                                                tint = HorizonSunset,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                    is DownloadState.FetchingStream -> {
+                                        CircularProgressIndicator(
+                                            color = HorizonGold,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    is DownloadState.Downloading -> {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            CircularProgressIndicator(
+                                                progress = { progress },
+                                                color = HorizonSunset,
+                                                strokeWidth = 3.dp,
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                            Text(
+                                                text = "${(progress * 100).toInt()}%",
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = HorizonSunset
+                                            )
+                                        }
+                                    }
+                                    is DownloadState.Success -> {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CheckCircle,
+                                            contentDescription = "Concluído",
+                                            tint = Color.Green,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    is DownloadState.Error -> {
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.downloadOnlineTrack(track, context)
+                                                Toast.makeText(context, "Reiniciando download...", Toast.LENGTH_SHORT).show()
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Error,
+                                                contentDescription = "Erro. Toque para tentar novamente",
+                                                tint = Color.Red,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OnlineTrackSkeletonItem() {
+    val infiniteTransition = rememberInfiniteTransition(label = "skeleton")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000, easing = FastOutSlowInEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(ObsidianSlate.copy(alpha = alpha))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(ObsidianGray)
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(ObsidianGray)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.35f)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(ObsidianGray)
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(ObsidianGray)
+        )
+    }
 }
