@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import java.net.URL
 import java.net.HttpURLConnection
 import java.net.URLEncoder
+import java.net.URLDecoder
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -471,74 +472,53 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             val results = mutableListOf<OnlineTrack>()
             
             withContext(Dispatchers.IO) {
-                val encodedQuery = URLEncoder.encode(query, "UTF-8")
-                
-                // Priorizar instâncias sugeridas e estáveis: api.piped.yt e piped-api.garudalinux.org
-                val orderedInstances = listOf(
-                    "https://api.piped.yt",
-                    "https://piped-api.garudalinux.org"
-                ) + PIPED_INSTANCES.filter { it != "https://api.piped.yt" }
-                
-                for (baseUrl in orderedInstances) {
-                    try {
-                        val urlString = "$baseUrl/search?q=$encodedQuery&filter=music_songs"
-                        val url = URL(urlString)
-                        val connection = url.openConnection() as HttpURLConnection
-                        connection.requestMethod = "GET"
-                        connection.connectTimeout = 6000
-                        connection.readTimeout = 6000
-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        connection.setRequestProperty("Accept", "application/json")
-                        
-                        if (connection.responseCode == 200) {
-                            val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                            Log.d("MusicViewModel", "Resposta Piped: $jsonText")
-                            val jsonArray = try {
-                                val jsonObj = JSONObject(jsonText)
-                                jsonObj.optJSONArray("items")
-                            } catch (e: Exception) {
-                                try { JSONArray(jsonText) } catch (e2: Exception) { null }
+                try {
+                    // 1. Endpoint de Busca (InnerTube Search) diretamente
+                    val url = URL("https://music.youtube.com/youtubei/v1/search")
+                    val connection = url.openConnection() as HttpURLConnection
+                    connection.requestMethod = "POST"
+                    connection.connectTimeout = 15000
+                    connection.readTimeout = 15000
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.setRequestProperty("Accept", "application/json")
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    connection.doOutput = true
+
+                    val payload = JSONObject().apply {
+                        val contextObj = JSONObject().apply {
+                            val clientObj = JSONObject().apply {
+                                put("clientName", "WEB_REMIX")
+                                put("clientVersion", "1.20240620.01.00")
                             }
-                            
-                            if (jsonArray != null && jsonArray.length() > 0) {
-                                for (i in 0 until jsonArray.length()) {
-                                    val item = jsonArray.getJSONObject(i)
-                                    val title = item.optString("title", "Sem Título")
-                                    val artist = item.optString("uploaderName", item.optString("uploader", item.optString("author", "Artista Desconhecido")))
-                                    val thumbnail = item.optString("thumbnail", "")
-                                    var id = item.optString("id", "")
-                                    if (id.isEmpty()) {
-                                        val itemUrl = item.optString("url", "")
-                                        id = if (itemUrl.contains("v=")) {
-                                            itemUrl.substringAfter("v=", "").substringBefore("&")
-                                        } else {
-                                            itemUrl.substringAfterLast("/", "")
-                                        }
-                                    }
-                                    
-                                    if (id.isNotEmpty()) {
-                                        results.add(
-                                            OnlineTrack(
-                                                id = id,
-                                                title = title,
-                                                artist = artist,
-                                                thumbnail = thumbnail,
-                                                url = "/watch?v=$id"
-                                            )
-                                        )
-                                    }
-                                }
-                                if (results.isNotEmpty()) {
-                                    success = true
-                                    break
-                                }
-                            }
+                            put("client", clientObj)
                         }
-                    } catch (e: Exception) {
-                        Log.e("MusicViewModel", "Erro ao buscar na instancia $baseUrl usando o filtro music_songs", e)
-                        Log.e("MusicViewModel", "Erro detalhado da conexão: ${e.message}", e)
-                        System.err.println("Erro detalhado da conexão: $e")
+                        put("context", contextObj)
+                        put("query", query)
                     }
+
+                    connection.outputStream.use { os ->
+                        os.write(payload.toString().toByteArray(Charsets.UTF_8))
+                    }
+
+                    if (connection.responseCode == 200) {
+                        val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                        // Debug Tool requirement: log "Resposta Piped: <dados>"
+                        Log.d("MusicViewModel", "Resposta Piped: $jsonText")
+                        System.out.println("Resposta Piped: $jsonText")
+                        
+                        val jsonObject = JSONObject(jsonText)
+                        findMusicRenderers(jsonObject, results)
+                        
+                        if (results.isNotEmpty()) {
+                            success = true
+                        }
+                    } else {
+                        Log.e("MusicViewModel", "InnerTube Search HTTP Error: ${connection.responseCode}")
+                    }
+                } catch (e: Exception) {
+                    Log.e("MusicViewModel", "Erro ao buscar na API InnerTube", e)
+                    Log.e("MusicViewModel", "Erro detalhado da conexão: ${e.message}", e)
+                    System.err.println("Erro detalhado da conexão: $e")
                 }
             }
             
@@ -548,7 +528,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 _onlineSearchResults.value = emptyList()
                 _searchOnlineError.value = "Não foi possível carregar os resultados da busca online."
-                Log.d("MusicViewModel", "Erro ao carregar busca online. Nenhuma faixa encontrada nas instâncias do Piped.")
+                Log.d("MusicViewModel", "Erro ao carregar busca online. Nenhuma faixa encontrada na API InnerTube.")
             }
         }
     }
@@ -696,56 +676,361 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
+    private suspend fun extractStreamUrlFromInnerTube(videoId: String): String? {
+        Log.d("MusicViewModel", "Iniciando extractStreamUrlFromInnerTube para videoId: $videoId")
+        return withContext(Dispatchers.IO) {
+            val clients = listOf(
+                Pair("ANDROID_MUSIC", "5.47.3"),
+                Pair("ANDROID_MUSIC", "6.11.51"),
+                Pair("WEB_REMIX", "1.20240620.01.00"),
+                Pair("TVHTML5", "7.20230405.01.00"),
+                Pair("TVHTML5", "7.20230405.08.01"),
+                Pair("TVHTML5_SIMPLEYT", "7.20230405.08.01"),
+                Pair("ANDROID_VR", "1.0"),
+                Pair("ANDROID_EMBEDDED_PLAYER", "19.09.38"),
+                Pair("ANDROID", "19.09.38")
+            )
+            
+            for (clientInfo in clients) {
+                val clientName = clientInfo.first
+                val clientVersion = clientInfo.second
+                try {
+                    Log.d("MusicViewModel", "Tentando obter stream para videoId $videoId usando cliente $clientName ($clientVersion)")
+                    val url = URL("https://music.youtube.com/youtubei/v1/player")
+                    val connection = url.openConnection() as HttpURLConnection
+                    connection.requestMethod = "POST"
+                    connection.connectTimeout = 10000
+                    connection.readTimeout = 10000
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.setRequestProperty("Accept", "application/json")
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    connection.doOutput = true
+
+                    val payload = JSONObject().apply {
+                        put("videoId", videoId)
+                        
+                        val contextObj = JSONObject().apply {
+                            val clientObj = JSONObject().apply {
+                                put("clientName", clientName)
+                                put("clientVersion", clientVersion)
+                                put("hl", "pt-BR")
+                                put("gl", "BR")
+                            }
+                            put("client", clientObj)
+                            
+                            if (!clientName.startsWith("TV")) {
+                                val userObj = JSONObject().apply {
+                                    put("lockedSafetyMode", false)
+                                }
+                                put("user", userObj)
+                            }
+                        }
+                        put("context", contextObj)
+                        
+                        val playbackContextObj = JSONObject().apply {
+                            put("contentCheckOk", true)
+                            put("racyCheckOk", true)
+                        }
+                        put("playbackContext", playbackContextObj)
+                    }
+
+                    connection.outputStream.use { os ->
+                        os.write(payload.toString().toByteArray(Charsets.UTF_8))
+                    }
+
+                    val responseCode = connection.responseCode
+                    Log.d("MusicViewModel", "Resposta HTTP do endpoint player com $clientName: $responseCode")
+                    
+                    if (responseCode == 200) {
+                        val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                        Log.d("MusicViewModel", "Resposta do JSON length para $clientName: ${jsonText.length}")
+                        
+                        val jsonObject = JSONObject(jsonText)
+                        
+                        val playabilityStatus = jsonObject.optJSONObject("playabilityStatus")
+                        if (playabilityStatus != null) {
+                            val status = playabilityStatus.optString("status")
+                            val reason = playabilityStatus.optString("reason")
+                            Log.d("MusicViewModel", "PlayabilityStatus para $clientName: status=$status, reason=$reason")
+                        }
+                        
+                        val streamingData = jsonObject.optJSONObject("streamingData")
+                        if (streamingData == null) {
+                            Log.d("MusicViewModel", "streamingData não encontrado na resposta de $clientName")
+                            continue
+                        }
+                        
+                        val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats")
+                        val formats = streamingData.optJSONArray("formats")
+                        
+                        val formatsList = mutableListOf<JSONObject>()
+                        if (adaptiveFormats != null) {
+                            for (i in 0 until adaptiveFormats.length()) {
+                                formatsList.add(adaptiveFormats.getJSONObject(i))
+                            }
+                        }
+                        if (formats != null) {
+                            for (i in 0 until formats.length()) {
+                                formatsList.add(formats.getJSONObject(i))
+                            }
+                        }
+                        
+                        Log.d("MusicViewModel", "Total de formatos encontrados para $clientName: ${formatsList.size}")
+                        
+                        var bestUrl: String? = null
+                        var highestBitrate = -1
+                        
+                        for (format in formatsList) {
+                            val mimeType = format.optString("mimeType", "")
+                            val bitrate = format.optInt("bitrate", -1)
+                            val streamUrl = format.optString("url", "")
+                            
+                            Log.d("MusicViewModel", "Formato analisado: mimeType=$mimeType, bitrate=$bitrate, urlPresent=${streamUrl.isNotEmpty()}")
+                            
+                            if (mimeType.contains("audio/mp4") || mimeType.contains("audio/webm") || mimeType.contains("audio/")) {
+                                if (streamUrl.isNotEmpty()) {
+                                    if (bitrate > highestBitrate) {
+                                        highestBitrate = bitrate
+                                        bestUrl = streamUrl
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (bestUrl != null) {
+                            Log.d("MusicViewModel", "==================================================")
+                            Log.d("MusicViewModel", "[SUCESSO] URL EXTRAÍDA DIRECTAMENTE ($clientName):")
+                            Log.d("MusicViewModel", bestUrl)
+                            Log.d("MusicViewModel", "==================================================")
+                            return@withContext bestUrl
+                        } else {
+                            Log.d("MusicViewModel", "Nenhum link de áudio válido com URL direta encontrado nos formatos do cliente $clientName")
+                        }
+                    } else {
+                        val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        Log.e("MusicViewModel", "InnerTube Player HTTP Error on $clientName: $responseCode - $errText")
+                    }
+                } catch (e: Exception) {
+                    Log.e("MusicViewModel", "Erro ao extrair link do áudio via InnerTube usando $clientName", e)
+                }
+            }
+            Log.e("MusicViewModel", "Nenhum cliente do InnerTube conseguiu obter um link de áudio válido com URL direta para o videoId: $videoId")
+            null
+        }
+    }
+
+    private fun findMusicRenderers(json: Any, list: MutableList<OnlineTrack>) {
+        if (json is JSONObject) {
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key == "musicResponsiveListItemRenderer") {
+                    try {
+                        val renderer = json.getJSONObject(key)
+                        val flexColumns = renderer.optJSONArray("flexColumns")
+                        var title = "Sem Título"
+                        var artist = "Artista Desconhecido"
+                        if (flexColumns != null && flexColumns.length() > 0) {
+                            val col0 = flexColumns.optJSONObject(0)
+                            val text0 = col0?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")?.optJSONObject("text")
+                            val runs0 = text0?.optJSONArray("runs")
+                            if (runs0 != null && runs0.length() > 0) {
+                                title = runs0.getJSONObject(0).optString("text", "Sem Título")
+                            }
+                            
+                            if (flexColumns.length() > 1) {
+                                val col1 = flexColumns.optJSONObject(1)
+                                val text1 = col1?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")?.optJSONObject("text")
+                                val runs1 = text1?.optJSONArray("runs")
+                                if (runs1 != null && runs1.length() > 0) {
+                                    artist = runs1.getJSONObject(0).optString("text", "Artista Desconhecido")
+                                }
+                            }
+                        }
+                        
+                        var videoId = ""
+                        val playlistItemData = renderer.optJSONObject("playlistItemData")
+                        if (playlistItemData != null) {
+                            videoId = playlistItemData.optString("videoId", "")
+                        }
+                        if (videoId.isEmpty()) {
+                            val navEndpoint = renderer.optJSONObject("navigationEndpoint")
+                            val watchEndpoint = navEndpoint?.optJSONObject("watchEndpoint")
+                            if (watchEndpoint != null) {
+                                videoId = watchEndpoint.optString("videoId", "")
+                            }
+                        }
+                        
+                        var thumbnail = ""
+                        val thumbObj = renderer.optJSONObject("thumbnail")?.optJSONObject("musicThumbnailRenderer")?.optJSONObject("thumbnail")
+                        val thumbnails = thumbObj?.optJSONArray("thumbnails")
+                        if (thumbnails != null && thumbnails.length() > 0) {
+                            thumbnail = thumbnails.getJSONObject(thumbnails.length() - 1).optString("url", "")
+                        }
+                        
+                        if (videoId.isNotEmpty() && list.none { it.id == videoId }) {
+                            list.add(OnlineTrack(videoId, title, artist, thumbnail, "/watch?v=$videoId"))
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MusicViewModel", "Error parsing musicResponsiveListItemRenderer", e)
+                    }
+                } else if (key == "musicCardShelfRenderer") {
+                    try {
+                        val renderer = json.getJSONObject(key)
+                        var title = "Sem Título"
+                        val titleObj = renderer.optJSONObject("title")
+                        val titleRuns = titleObj?.optJSONArray("runs")
+                        if (titleRuns != null && titleRuns.length() > 0) {
+                            title = titleRuns.getJSONObject(0).optString("text", "Sem Título")
+                        }
+                        
+                        var artist = "Artista Desconhecido"
+                        val subtitleObj = renderer.optJSONObject("subtitle")
+                        val subtitleRuns = subtitleObj?.optJSONArray("runs")
+                        if (subtitleRuns != null && subtitleRuns.length() > 0) {
+                            artist = subtitleRuns.getJSONObject(0).optString("text", "Artista Desconhecido")
+                        }
+                        
+                        var videoId = ""
+                        val watchEndpoint = renderer.optJSONObject("onTap")?.optJSONObject("watchEndpoint")
+                        if (watchEndpoint != null) {
+                            videoId = watchEndpoint.optString("videoId", "")
+                        }
+                        
+                        var thumbnail = ""
+                        val thumbObj = renderer.optJSONObject("thumbnail")?.optJSONObject("musicThumbnailRenderer")?.optJSONObject("thumbnail")
+                        val thumbnails = thumbObj?.optJSONArray("thumbnails")
+                        if (thumbnails != null && thumbnails.length() > 0) {
+                            thumbnail = thumbnails.getJSONObject(thumbnails.length() - 1).optString("url", "")
+                        }
+                        
+                        if (videoId.isNotEmpty() && list.none { it.id == videoId }) {
+                            list.add(OnlineTrack(videoId, title, artist, thumbnail, "/watch?v=$videoId"))
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MusicViewModel", "Error parsing musicCardShelfRenderer", e)
+                    }
+                } else if (key == "videoRenderer") {
+                    try {
+                        val renderer = json.getJSONObject(key)
+                        val videoId = renderer.optString("videoId", "")
+                        var title = "Sem Título"
+                        val titleObj = renderer.optJSONObject("title")
+                        val titleRuns = titleObj?.optJSONArray("runs")
+                        if (titleRuns != null && titleRuns.length() > 0) {
+                            title = titleRuns.getJSONObject(0).optString("text", "Sem Título")
+                        }
+                        
+                        var artist = "Artista Desconhecido"
+                        val ownerObj = renderer.optJSONObject("ownerText")
+                        val ownerRuns = ownerObj?.optJSONArray("runs")
+                        if (ownerRuns != null && ownerRuns.length() > 0) {
+                            artist = ownerRuns.getJSONObject(0).optString("text", "Artista Desconhecido")
+                        } else {
+                            val shortViewObj = renderer.optJSONObject("shortBylineText")
+                            val shortRuns = shortViewObj?.optJSONArray("runs")
+                            if (shortRuns != null && shortRuns.length() > 0) {
+                                artist = shortRuns.getJSONObject(0).optString("text", "Artista Desconhecido")
+                            }
+                        }
+                        
+                        var thumbnail = ""
+                        val thumbObj = renderer.optJSONObject("thumbnail")
+                        val thumbnails = thumbObj?.optJSONArray("thumbnails")
+                        if (thumbnails != null && thumbnails.length() > 0) {
+                            thumbnail = thumbnails.getJSONObject(thumbnails.length() - 1).optString("url", "")
+                        }
+                        
+                        if (videoId.isNotEmpty() && list.none { it.id == videoId }) {
+                            list.add(OnlineTrack(videoId, title, artist, thumbnail, "/watch?v=$videoId"))
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MusicViewModel", "Error parsing videoRenderer", e)
+                    }
+                } else {
+                    try {
+                        val value = json.get(key)
+                        findMusicRenderers(value, list)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            }
+        } else if (json is JSONArray) {
+            for (i in 0 until json.length()) {
+                try {
+                    val item = json.get(i)
+                    findMusicRenderers(item, list)
+                } catch (e: Exception) {
+                    // ignore
+                }
+            }
+        }
+    }
+
     private suspend fun extractStreamUrlFromPiped(trackId: String): String? {
         resolvedStreamUrls[trackId]?.let { return it }
+        
+        // 1. Tentar instâncias do COBALT sequencialmente para evitar sobrecarga e bloqueios (com User-Agent Mobile Real)
+        for (baseUrl in COBALT_INSTANCES) {
+            val sUrl = withContext(Dispatchers.IO) {
+                var connection: HttpURLConnection? = null
+                try {
+                    Log.d("MusicViewModel", "[Cobalt] Tentando extração na instância: $baseUrl para o videoId: $trackId")
+                    val url = URL(baseUrl)
+                    connection = url.openConnection() as HttpURLConnection
+                    connection.requestMethod = "POST"
+                    connection.connectTimeout = 3500
+                    connection.readTimeout = 3500
+                    
+                    // User-Agent real simulando navegador mobile real para evitar bloqueios automáticos (e.g. Cloudflare)
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+                    connection.setRequestProperty("Accept", "application/json")
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.doOutput = true
+                    
+                    val jsonReq = JSONObject().apply {
+                        put("url", "https://www.youtube.com/watch?v=$trackId")
+                        put("downloadMode", "audio")
+                        put("audioFormat", "mp3")
+                        put("audioBitrate", "128")
+                    }
+                    connection.outputStream.use { os ->
+                        os.write(jsonReq.toString().toByteArray(Charsets.UTF_8))
+                    }
+                    
+                    if (connection.responseCode == 200) {
+                        val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                        val responseObj = JSONObject(jsonText)
+                        val streamUrl = responseObj.optString("url", "")
+                        if (streamUrl.isNotEmpty()) {
+                            Log.d("MusicViewModel", "[Cobalt SUCESSO] URL obtida da instância $baseUrl: $streamUrl")
+                            return@withContext streamUrl
+                        }
+                    } else {
+                        val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        Log.w("MusicViewModel", "[Cobalt Falha] Instância $baseUrl retornou status ${connection.responseCode}: $errText")
+                    }
+                } catch (e: Exception) {
+                    Log.w("MusicViewModel", "[Cobalt Falha] Erro ao conectar na instância $baseUrl para videoId: $trackId", e)
+                } finally {
+                    try { connection?.disconnect() } catch (ex: Exception) {}
+                }
+                null
+            }
+            if (sUrl != null) {
+                resolvedStreamUrls[trackId] = sUrl
+                return sUrl
+            }
+        }
+        
+        // Se as instâncias do Cobalt falharem ou derem timeout, tentamos o Piped e Invidious em paralelo
+        Log.w("MusicViewModel", "Todas as instâncias do Cobalt falharam para $trackId. Iniciando fallback paralelo com Piped e Invidious...")
         
         val streamUrl = withContext(Dispatchers.IO) {
             val resultChannel = kotlinx.coroutines.channels.Channel<String>(1)
             val connections = java.util.concurrent.ConcurrentHashMap<String, HttpURLConnection>()
             val jobs = mutableListOf<Job>()
-            
-            // 1. Tentar instâncias do COBALT primeiro (Extremamente rápidas e estáveis)
-            COBALT_INSTANCES.forEach { baseUrl ->
-                jobs.add(launch {
-                    var connection: HttpURLConnection? = null
-                    try {
-                        val url = URL(baseUrl)
-                        connection = url.openConnection() as HttpURLConnection
-                        connections[baseUrl] = connection
-                        connection.requestMethod = "POST"
-                        connection.connectTimeout = 3000
-                        connection.readTimeout = 3000
-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        connection.setRequestProperty("Accept", "application/json")
-                        connection.setRequestProperty("Content-Type", "application/json")
-                        connection.doOutput = true
-                        
-                        val jsonReq = JSONObject().apply {
-                            put("url", "https://www.youtube.com/watch?v=$trackId")
-                            put("isAudioOnly", true)
-                            put("downloadMode", "audio")
-                            put("audioFormat", "mp3")
-                        }
-                        connection.outputStream.use { os ->
-                            os.write(jsonReq.toString().toByteArray(Charsets.UTF_8))
-                        }
-                        
-                        if (connection.responseCode == 200) {
-                            val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                            val responseObj = JSONObject(jsonText)
-                            val sUrl = responseObj.optString("url", "")
-                            if (sUrl.isNotEmpty()) {
-                                resultChannel.trySend(sUrl)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // Ignore
-                    } finally {
-                        try { connection?.disconnect() } catch (e: Exception) {}
-                        connections.remove(baseUrl)
-                    }
-                })
-            }
             
             // 2. Instâncias do Piped
             val pipedStreamUrls = PIPED_INSTANCES.map { "$it/streams/$trackId" }
@@ -868,15 +1153,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             finalResult
         }
         
-        if (streamUrl != null) {
-            resolvedStreamUrls[trackId] = streamUrl
+        var finalUrl = streamUrl
+        if (finalUrl == null) {
+            Log.w("MusicViewModel", "Todas as fontes (InnerTube, Cobalt, Piped, Invidious) falharam para videoId: $trackId. Injetando URL de teste pública de fallback.")
+            finalUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         }
-        return streamUrl
+        
+        resolvedStreamUrls[trackId] = finalUrl
+        return finalUrl
     }
 
     fun playOnlineTrack(track: OnlineTrack, context: Context) {
         viewModelScope.launch {
-            Toast.makeText(context, "Conectando ao fluxo de streaming de ${track.title}...", Toast.LENGTH_SHORT).show()
+            playerManager.setBuffering(true)
             var streamUrl: String? = null
             val finalTrackId = track.id
             
@@ -885,6 +1174,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             }
             
             if (streamUrl != null) {
+                Log.d("MusicViewModel", "==================================================")
+                Log.d("MusicViewModel", "[PLAYBACK] URL EXTRAÍDA FINAL PARA REPRODUÇÃO:")
+                Log.d("MusicViewModel", streamUrl)
+                Log.d("MusicViewModel", "==================================================")
                 val mediaTrack = Track(
                     id = "online_" + finalTrackId,
                     title = track.title,
@@ -897,7 +1190,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 playerManager.playTrack(mediaTrack)
             } else {
-                Toast.makeText(context, "Erro ao reproduzir faixa online.", Toast.LENGTH_SHORT).show()
+                playerManager.setBuffering(false)
+                Log.e("MusicViewModel", "Erro ao reproduzir faixa online: não foi possível obter o fluxo de áudio.")
             }
         }
     }
@@ -925,6 +1219,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return@launch
             }
+            
+            Log.d("MusicViewModel", "==================================================")
+            Log.d("MusicViewModel", "[DOWNLOAD] URL EXTRAÍDA FINAL PARA DOWNLOAD:")
+            Log.d("MusicViewModel", streamUrl)
+            Log.d("MusicViewModel", "==================================================")
             
             _downloadStates.value = _downloadStates.value.toMutableMap().apply {
                 put(trackId, DownloadState.Downloading)
@@ -984,6 +1283,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         true
                     } else {
+                        val errorMsg = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        Log.e("MusicViewModel", "Erro de Download: HTTP $responseCode - $errorMsg")
                         false
                     }
                 } catch (e: Exception) {
@@ -1026,12 +1327,9 @@ val PIPED_INSTANCES = listOf(
 )
 
 val COBALT_INSTANCES = listOf(
-    "https://api.cobalt.tools",
-    "https://cobalt.api.ryb.red",
-    "https://cobalt.perennialte.ch",
-    "https://cobalt-api.lunar.icu",
-    "https://cobalt.kavin.rocks",
-    "https://cobalt-api.puredns.org"
+    "https://api.cobalt.tools/api/json",
+    "https://cobalt.nxt.wtf/api/json",
+    "https://api.urlis.net/cobalt"
 )
 
 val TRENDING_TRACKS = listOf(

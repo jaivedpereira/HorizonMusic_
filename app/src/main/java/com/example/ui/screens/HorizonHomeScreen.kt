@@ -82,6 +82,7 @@ fun HorizonHomeScreen(
     val queue by viewModel.playerManager.queue.collectAsState()
     val isShuffle by viewModel.playerManager.isShuffle.collectAsState()
     val repeatMode by viewModel.playerManager.repeatMode.collectAsState()
+    val isBuffering by viewModel.playerManager.isBuffering.collectAsState()
 
     // Configurações e preferências
     val showCovers by viewModel.showCovers.collectAsState()
@@ -398,12 +399,20 @@ fun HorizonHomeScreen(
                             onClick = { viewModel.playerManager.togglePlayPause() },
                             modifier = Modifier.size(40.dp)
                         ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = "Play/Pause",
-                                tint = TextWhite,
-                                modifier = Modifier.size(26.dp)
-                            )
+                            if (isBuffering) {
+                                CircularProgressIndicator(
+                                    color = HorizonSunset,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = "Play/Pause",
+                                    tint = TextWhite,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
                         }
 
                         // Botão Próximo
@@ -540,6 +549,7 @@ fun HorizonHomeScreen(
                 FullPlayerView(
                     track = currentTrack!!,
                     isPlaying = isPlaying,
+                    isBuffering = isBuffering,
                     position = currentPosition,
                     duration = duration,
                     isShuffle = isShuffle,
@@ -1416,6 +1426,7 @@ fun PlaylistItemCard(
 fun FullPlayerView(
     track: Track,
     isPlaying: Boolean,
+    isBuffering: Boolean = false,
     position: Long,
     duration: Long,
     isShuffle: Boolean,
@@ -1937,12 +1948,20 @@ fun FullPlayerView(
                         .clickable { onPlayPauseToggle() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = "Tocar/Pausar",
-                        tint = Color.Black,
-                        modifier = Modifier.size(38.dp)
-                    )
+                    if (isBuffering) {
+                        CircularProgressIndicator(
+                            color = Color.Black,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = "Tocar/Pausar",
+                            tint = Color.Black,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
                 }
 
                 // Next
@@ -2877,6 +2896,8 @@ fun OnlineSearchSection(
     val searchError by viewModel.searchOnlineError.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
     val downloadProgresses by viewModel.downloadProgresses.collectAsState()
+    val isBuffering by viewModel.playerManager.isBuffering.collectAsState()
+    val currentTrack by viewModel.playerManager.currentTrack.collectAsState()
 
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
@@ -3042,7 +3063,7 @@ fun OnlineSearchSection(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "A conexão com o servidor Piped falhou.",
+                    text = "Erro de conexão com o servidor de música.",
                     color = TextWhite,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
@@ -3166,12 +3187,20 @@ fun OnlineSearchSection(
                                                                 .background(Color.Black.copy(alpha = 0.6f)),
                                                             contentAlignment = Alignment.Center
                                                         ) {
-                                                            Icon(
-                                                                imageVector = Icons.Rounded.PlayArrow,
-                                                                contentDescription = "Ouvir",
-                                                                tint = HorizonSunset,
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
+                                                            if (isBuffering && currentTrack?.id == "online_" + track.id) {
+                                                                CircularProgressIndicator(
+                                                                    color = HorizonSunset,
+                                                                    strokeWidth = 2.dp,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            } else {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                                    contentDescription = "Ouvir",
+                                                                    tint = HorizonSunset,
+                                                                    modifier = Modifier.size(18.dp)
+                                                                )
+                                                            }
                                                         }
                                                     }
 
@@ -3316,12 +3345,20 @@ fun OnlineSearchSection(
                                         .background(Color.Black.copy(alpha = 0.35f)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.PlayArrow,
-                                        contentDescription = "Ouvir",
-                                        tint = HorizonSunset,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                                    if (isBuffering && currentTrack?.id == "online_" + track.id) {
+                                        CircularProgressIndicator(
+                                            color = HorizonSunset,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Rounded.PlayArrow,
+                                            contentDescription = "Ouvir",
+                                            tint = HorizonSunset,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
                             }
 

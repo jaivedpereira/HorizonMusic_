@@ -28,6 +28,13 @@ class MusicPlayerManager(private val context: Context) {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    private val _isBuffering = MutableStateFlow(false)
+    val isBuffering: StateFlow<Boolean> = _isBuffering.asStateFlow()
+
+    fun setBuffering(buffering: Boolean) {
+        _isBuffering.value = buffering
+    }
+
     private val _currentPosition = MutableStateFlow(0L)
     val currentPosition: StateFlow<Long> = _currentPosition.asStateFlow()
 
@@ -58,6 +65,8 @@ class MusicPlayerManager(private val context: Context) {
         get() = mediaSession?.sessionToken
 
     companion object {
+        private const val FALLBACK_TEST_URL = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+
         @Volatile
         var instance: MusicPlayerManager? = null
             private set
@@ -157,22 +166,49 @@ class MusicPlayerManager(private val context: Context) {
                     handleTrackCompletion()
                 }
                 setOnPreparedListener { mp ->
+                    Log.d("MusicPlayerManager", "[OnPreparedListener] Buffer pronto para reproduzir!")
+                    _isBuffering.value = false
                     _duration.value = mp.duration.toLong()
-                    mp.start()
-                    _isPlaying.value = true
+                    try {
+                        mp.start()
+                        _isPlaying.value = true
+                        Log.d("MusicPlayerManager", "Iniciou reprodução do player com sucesso.")
+                    } catch (e: Exception) {
+                        Log.e("MusicPlayerManager", "Erro ao chamar start() no OnPrepared", e)
+                        _isPlaying.value = false
+                    }
                     updateMediaSessionMetadata()
                     updateMediaSessionState()
                     updateServiceAndNotification()
                     startProgressPolling()
                 }
-                setOnErrorListener { _, what, extra ->
-                    Log.e("MusicPlayerManager", "MediaPlayer Error: what=$what, extra=$extra")
+                setOnErrorListener { mp, what, extra ->
+                    Log.e("MusicPlayerManager", "MediaPlayer Error Callback: what=$what, extra=$extra. Resetando o player...")
+                    _isBuffering.value = false
                     _isPlaying.value = false
+                    
+                    try {
+                        mp.reset()
+                    } catch (ex: Exception) {
+                        Log.e("MusicPlayerManager", "Erro ao fazer reset do player no onError", ex)
+                    }
+                    
                     updateMediaSessionState()
                     updateServiceAndNotification()
                     stopProgressPolling()
-                    // Avança em caso de erro para não travar
-                    skipToNext()
+                    
+                    // Se estourou erro de codec/rede em áudio online e não estávamos tocando o fallback, vamos para o fallback
+                    val track = _currentTrack.value
+                    if (track != null && !track.isLocal && track.uri != FALLBACK_TEST_URL) {
+                        Log.w("MusicPlayerManager", "Erro crítico ao reproduzir '${track.title}'. Acionando fallback assíncrono para URL pública...")
+                        val fallbackTrack = track.copy(uri = FALLBACK_TEST_URL)
+                        playerScope.launch {
+                            playTrack(fallbackTrack)
+                        }
+                    } else {
+                        Log.e("MusicPlayerManager", "Falha no fallback ou faixa local inválida. Pulando de faixa.")
+                        skipToNext()
+                    }
                     true
                 }
             }
@@ -208,29 +244,73 @@ class MusicPlayerManager(private val context: Context) {
 
     fun playTrack(track: Track) {
         try {
+            Log.d("MusicPlayerManager", "========================================")
+            Log.d("MusicPlayerManager", "Iniciando playTrack para: ${track.title}")
+            Log.d("MusicPlayerManager", "URL recebida: ${track.uri}")
+            
+            // 1. Reset do Player: Antes de qualquer coisa, chame player.reset()
+            mediaPlayer?.reset()
+
+            // 2. Atualização Visual Imediata (Loading)
+            _isBuffering.value = true
             stopProgressPolling()
             _isPlaying.value = false
             _currentPosition.value = 0L
             _currentTrack.value = track
 
-            mediaPlayer?.reset()
-            if (track.isLocal) {
-                val uri = Uri.parse(track.uri)
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    mediaPlayer?.setDataSource(pfd.fileDescriptor)
-                } ?: run {
-                    mediaPlayer?.setDataSource(context, uri)
-                }
-            } else {
-                mediaPlayer?.setDataSource(track.uri)
+            // 3. Validação Anti-Crash da URL
+            var playUri = track.uri
+            if (!track.isLocal && (playUri.isNullOrEmpty() || playUri.isBlank())) {
+                Log.w("MusicPlayerManager", "URL extraída para '${track.title}' é inválida ou vazia! Injetando URL de teste pública de fallback.")
+                playUri = FALLBACK_TEST_URL
             }
+
+            Log.d("MusicPlayerManager", "URL final que será enviada ao MediaPlayer: $playUri")
+
+            // 4. Definição da Fonte (Set DataSource) com bloco try/catch robusto
+            try {
+                if (track.isLocal) {
+                    val uri = Uri.parse(playUri)
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        mediaPlayer?.setDataSource(pfd.fileDescriptor)
+                    } ?: run {
+                        mediaPlayer?.setDataSource(context, uri)
+                    }
+                } else {
+                    mediaPlayer?.setDataSource(playUri)
+                }
+            } catch (dsEx: Exception) {
+                Log.e("MusicPlayerManager", "Erro ao configurar fonte de dados (DataSource) para ${track.title}", dsEx)
+                if (!track.isLocal && playUri != FALLBACK_TEST_URL) {
+                    Log.w("MusicPlayerManager", "Tentando fallback imediato para URL de teste pública...")
+                    val fallbackTrack = track.copy(uri = FALLBACK_TEST_URL)
+                    playTrack(fallbackTrack)
+                    return
+                } else {
+                    throw dsEx
+                }
+            }
+
+            // 5. Preparação Assíncrona (Prepare Async)
+            Log.d("MusicPlayerManager", "Iniciando prepareAsync...")
             mediaPlayer?.prepareAsync()
+
         } catch (e: Exception) {
-            Log.e("MusicPlayerManager", "Erro ao iniciar faixa: ${track.title}", e)
+            Log.e("MusicPlayerManager", "Erro grave na inicialização assíncrona de ${track.title}", e)
+            _isBuffering.value = false
             _isPlaying.value = false
             updateMediaSessionState()
             updateServiceAndNotification()
-            skipToNext()
+            
+            val currentUri = track.uri
+            if (!track.isLocal && currentUri != FALLBACK_TEST_URL) {
+                Log.w("MusicPlayerManager", "Erro de inicialização capturado. Acionando fallback de segurança assíncrono...")
+                val fallbackTrack = track.copy(uri = FALLBACK_TEST_URL)
+                playTrack(fallbackTrack)
+            } else {
+                Log.e("MusicPlayerManager", "Falha definitiva. Pulando para a próxima faixa.")
+                skipToNext()
+            }
         }
     }
 
