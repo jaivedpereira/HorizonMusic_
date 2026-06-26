@@ -971,194 +971,92 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun extractStreamUrlFromPiped(trackId: String): String? {
         resolvedStreamUrls[trackId]?.let { return it }
         
-        // 1. Tentar instâncias do COBALT sequencialmente para evitar sobrecarga e bloqueios (com User-Agent Mobile Real)
-        for (baseUrl in COBALT_INSTANCES) {
-            val sUrl = withContext(Dispatchers.IO) {
-                var connection: HttpURLConnection? = null
-                try {
-                    Log.d("MusicViewModel", "[Cobalt] Tentando extração na instância: $baseUrl para o videoId: $trackId")
-                    val url = URL(baseUrl)
-                    connection = url.openConnection() as HttpURLConnection
-                    connection.requestMethod = "POST"
-                    connection.connectTimeout = 3500
-                    connection.readTimeout = 3500
-                    
-                    // User-Agent real simulando navegador mobile real para evitar bloqueios automáticos (e.g. Cloudflare)
-                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+        val mainPipedInstance = "https://api.piped.yt"
+        val fallbackPipedInstance = "https://pipedapi.kavin.rocks"
+
+        // Build a list of unique Piped instances starting with the main ones
+        val instances = mutableListOf<String>().apply {
+            add(mainPipedInstance)
+            add(fallbackPipedInstance)
+            PIPED_INSTANCES.forEach { inst ->
+                if (inst != mainPipedInstance && inst != fallbackPipedInstance) {
+                    add(inst)
+                }
+            }
+        }
+
+        var finalUrl: String? = null
+        var lastException: Exception? = null
+
+        for (baseUrl in instances) {
+            val endpoint = "$baseUrl/streams/$trackId"
+            try {
+                Log.d("MusicViewModel", "[Piped] Tentando extrair streams para o videoId: $trackId na instância: $baseUrl")
+                val streamUrl = withContext(Dispatchers.IO) {
+                    val url = URL(endpoint)
+                    val connection = url.openConnection() as HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 6000
+                    connection.readTimeout = 6000
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
                     connection.setRequestProperty("Accept", "application/json")
-                    connection.setRequestProperty("Content-Type", "application/json")
-                    connection.doOutput = true
-                    
-                    val jsonReq = JSONObject().apply {
-                        put("url", "https://www.youtube.com/watch?v=$trackId")
-                        put("downloadMode", "audio")
-                        put("audioFormat", "mp3")
-                        put("audioBitrate", "128")
-                    }
-                    connection.outputStream.use { os ->
-                        os.write(jsonReq.toString().toByteArray(Charsets.UTF_8))
-                    }
-                    
+
                     if (connection.responseCode == 200) {
                         val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                        val responseObj = JSONObject(jsonText)
-                        val streamUrl = responseObj.optString("url", "")
-                        if (streamUrl.isNotEmpty()) {
-                            Log.d("MusicViewModel", "[Cobalt SUCESSO] URL obtida da instância $baseUrl: $streamUrl")
-                            return@withContext streamUrl
-                        }
-                    } else {
-                        val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                        Log.w("MusicViewModel", "[Cobalt Falha] Instância $baseUrl retornou status ${connection.responseCode}: $errText")
-                    }
-                } catch (e: Exception) {
-                    Log.w("MusicViewModel", "[Cobalt Falha] Erro ao conectar na instância $baseUrl para videoId: $trackId", e)
-                } finally {
-                    try { connection?.disconnect() } catch (ex: Exception) {}
-                }
-                null
-            }
-            if (sUrl != null) {
-                resolvedStreamUrls[trackId] = sUrl
-                return sUrl
-            }
-        }
-        
-        // Se as instâncias do Cobalt falharem ou derem timeout, tentamos o Piped e Invidious em paralelo
-        Log.w("MusicViewModel", "Todas as instâncias do Cobalt falharam para $trackId. Iniciando fallback paralelo com Piped e Invidious...")
-        
-        val streamUrl = withContext(Dispatchers.IO) {
-            val resultChannel = kotlinx.coroutines.channels.Channel<String>(1)
-            val connections = java.util.concurrent.ConcurrentHashMap<String, HttpURLConnection>()
-            val jobs = mutableListOf<Job>()
-            
-            // 2. Instâncias do Piped
-            val pipedStreamUrls = PIPED_INSTANCES.map { "$it/streams/$trackId" }
-            pipedStreamUrls.forEach { urlStr ->
-                jobs.add(launch {
-                    var connection: HttpURLConnection? = null
-                    try {
-                        val url = URL(urlStr)
-                        connection = url.openConnection() as HttpURLConnection
-                        connections[urlStr] = connection
-                        connection.requestMethod = "GET"
-                        connection.connectTimeout = 3000
-                        connection.readTimeout = 3000
-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        
-                        if (connection.responseCode == 200) {
-                            val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                            val jsonObject = JSONObject(jsonText)
-                            val audioStreams = jsonObject.optJSONArray("audioStreams")
-                            var bestUrl: String? = null
-                            if (audioStreams != null && audioStreams.length() > 0) {
-                                var maxBitrate = -1
-                                var bestStream: JSONObject? = null
+                        val jsonObject = JSONObject(jsonText)
+                        val audioStreams = jsonObject.optJSONArray("audioStreams")
+                        var bestUrl: String? = null
+                        if (audioStreams != null && audioStreams.length() > 0) {
+                            var maxBitrate = -1
+                            for (i in 0 until audioStreams.length()) {
+                                val s = audioStreams.getJSONObject(i)
+                                val format = s.optString("format", "").uppercase()
+                                val bitrate = s.optInt("bitrate", -1)
+                                val streamUrlVal = s.optString("url", "")
+                                if (streamUrlVal.isNotEmpty()) {
+                                    if (format.contains("M4A") || format.contains("WEBM")) {
+                                        if (bitrate > maxBitrate) {
+                                            maxBitrate = bitrate
+                                            bestUrl = streamUrlVal
+                                        }
+                                    }
+                                }
+                            }
+                            if (bestUrl == null) {
                                 for (i in 0 until audioStreams.length()) {
                                     val s = audioStreams.getJSONObject(i)
-                                    val format = s.optString("format", "").uppercase()
-                                    val bitrate = s.optInt("bitrate", -1)
-                                    if (format.contains("M4A")) {
-                                        if (bitrate > maxBitrate) {
-                                            maxBitrate = bitrate
-                                            bestStream = s
-                                        }
-                                    }
-                                }
-                                if (bestStream == null) {
-                                    bestStream = audioStreams.getJSONObject(0)
-                                }
-                                bestUrl = bestStream.optString("url", null)
-                            }
-                            if (bestUrl != null && bestUrl.isNotEmpty()) {
-                                resultChannel.trySend(bestUrl)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // Ignore
-                    } finally {
-                        try { connection?.disconnect() } catch (e: Exception) {}
-                        connections.remove(urlStr)
-                    }
-                })
-            }
-            
-            // 3. Instâncias do Invidious
-            val invidiousStreamUrls = listOf(
-                "https://yewtu.be",
-                "https://invidious.flokinet.to",
-                "https://invidious.nerdvpn.de",
-                "https://invidious.privacydev.net",
-                "https://iv.melmac.space",
-                "https://invidious.slipfox.xyz"
-            ).map { "$it/api/v1/videos/$trackId" }
-            invidiousStreamUrls.forEach { urlStr ->
-                jobs.add(launch {
-                    var connection: HttpURLConnection? = null
-                    try {
-                        val url = URL(urlStr)
-                        connection = url.openConnection() as HttpURLConnection
-                        connections[urlStr] = connection
-                        connection.requestMethod = "GET"
-                        connection.connectTimeout = 3000
-                        connection.readTimeout = 3000
-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                        
-                        if (connection.responseCode == 200) {
-                            val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                            val jsonObject = JSONObject(jsonText)
-                            val adaptiveFormats = jsonObject.optJSONArray("adaptiveFormats")
-                            var bestUrl: String? = null
-                            if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
-                                var maxBitrate = -1
-                                for (i in 0 until adaptiveFormats.length()) {
-                                    val format = adaptiveFormats.getJSONObject(i)
-                                    val type = format.optString("type", "")
-                                    val urlVal = format.optString("url", "")
-                                    val bitrate = format.optInt("bitrate", -1)
-                                    if (type.contains("audio") && urlVal.isNotEmpty()) {
-                                        if (bitrate > maxBitrate) {
-                                            maxBitrate = bitrate
-                                            bestUrl = urlVal
-                                        }
+                                    val streamUrlVal = s.optString("url", "")
+                                    if (streamUrlVal.isNotEmpty()) {
+                                        bestUrl = streamUrlVal
+                                        break
                                     }
                                 }
                             }
-                            if (bestUrl != null && bestUrl.isNotEmpty()) {
-                                resultChannel.trySend(bestUrl)
-                            }
                         }
-                    } catch (e: Exception) {
-                        // Ignore
-                    } finally {
-                        try { connection?.disconnect() } catch (e: Exception) {}
-                        connections.remove(urlStr)
+                        bestUrl
+                    } else {
+                        val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                        Log.w("MusicViewModel", "[Piped] Falha no status ${connection.responseCode} para $baseUrl: $errText")
+                        null
                     }
-                })
+                }
+                if (streamUrl != null && streamUrl.isNotEmpty()) {
+                    Log.d("MusicViewModel", "[Piped SUCESSO] URL extraída com sucesso de $baseUrl: $streamUrl")
+                    finalUrl = streamUrl
+                    break
+                }
+            } catch (e: Exception) {
+                lastException = e
+                Log.w("MusicViewModel", "[Piped Falha] Erro ao conectar/extrair de $baseUrl para $trackId", e)
             }
-            
-            var finalResult: String? = null
-            val receiverJob = launch {
-                try {
-                    finalResult = resultChannel.receive()
-                    jobs.forEach { it.cancel() }
-                    connections.values.forEach { 
-                        try { it.disconnect() } catch (e: Exception) {}
-                    }
-                } catch (e: Exception) {}
-            }
-            
-            jobs.joinAll()
-            receiverJob.cancel()
-            finalResult
         }
-        
-        var finalUrl = streamUrl
+
         if (finalUrl == null) {
-            Log.w("MusicViewModel", "Todas as fontes (InnerTube, Cobalt, Piped, Invidious) falharam para videoId: $trackId. Injetando URL de teste pública de fallback.")
+            Log.e("HorizonError", "Falha total na extração de streams do Piped para o videoId: $trackId", lastException)
+            Log.w("MusicViewModel", "Injetando URL de teste pública de fallback (SoundHelix).")
             finalUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         }
-        
+
         resolvedStreamUrls[trackId] = finalUrl
         return finalUrl
     }
