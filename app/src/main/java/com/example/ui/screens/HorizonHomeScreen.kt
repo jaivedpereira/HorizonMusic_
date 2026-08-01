@@ -2976,6 +2976,100 @@ fun OnlineSearchSection(
 
         Spacer(modifier = Modifier.height(14.dp))
 
+        // Configuração do servidor yt-dlp (Horizon Server)
+        val serverUrl by viewModel.serverBaseUrl.collectAsState()
+        var showServerDialog by remember { mutableStateOf(false) }
+        var serverInput by remember { mutableStateOf(serverUrl) }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (serverUrl.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(ObsidianSlate)
+                        .clickable { 
+                            serverInput = serverUrl
+                            showServerDialog = true 
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("🖥️", fontSize = 11.sp)
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = "Servidor conectado",
+                        color = Color(0xFF34d399),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(ObsidianSlate)
+                        .clickable { 
+                            serverInput = serverUrl
+                            showServerDialog = true 
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("🖥️", fontSize = 11.sp)
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = "Configurar servidor de áudio",
+                        color = HorizonGold,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        if (showServerDialog) {
+            AlertDialog(
+                onDismissRequest = { showServerDialog = false },
+                title = { Text("Servidor de áudio (yt-dlp)") },
+                text = {
+                    Column {
+                        Text(
+                            text = "Rode o servidor no seu PC/Termux e cole o endereço aqui.\nEx: http://192.168.0.10:8080",
+                            color = TextMuted,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = serverInput,
+                            onValueChange = { serverInput = it },
+                            placeholder = { Text("http://192.168.0.10:8080", fontSize = 13.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.setServerBaseUrl(serverInput)
+                        showServerDialog = false
+                    }) {
+                        Text("Salvar", color = HorizonSunset)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showServerDialog = false }) {
+                        Text("Cancelar", color = TextMuted)
+                    }
+                },
+                containerColor = ObsidianSlate
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
         // Horizontally Scrollable Genre Chips (Quick Search)
         val genres = listOf(
             "Sertanejo" to "🤠",

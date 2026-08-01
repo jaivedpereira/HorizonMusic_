@@ -2,7 +2,10 @@ package com.example.ui
 
 import android.app.Application
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -454,8 +457,53 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val _downloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloadStates: StateFlow<Map<String, DownloadState>> = _downloadStates.asStateFlow()
 
+    // ── Configuração do servidor yt-dlp (Horizon Server) ──
+    private val _serverBaseUrl = MutableStateFlow(prefs.getString("server_base_url", "") ?: "")
+    val serverBaseUrl: StateFlow<String> = _serverBaseUrl.asStateFlow()
+
+    fun setServerBaseUrl(url: String) {
+        prefs.edit().putString("server_base_url", url.trim().trimEnd('/')).apply()
+        _serverBaseUrl.value = url.trim().trimEnd('/')
+    }
+
     fun updateOnlineSearchQuery(query: String) {
         _onlineSearchQuery.value = query
+    }
+
+    // Busca no servidor yt-dlp (rápido e confiável)
+    private suspend fun searchViaServer(query: String, limit: Int): List<OnlineTrack> = withContext(Dispatchers.IO) {
+        val base = _serverBaseUrl.value
+        if (base.isEmpty()) return@withContext emptyList()
+        try {
+            val url = URL("$base/search?q=${URLEncoder.encode(query, "UTF-8")}&limit=$limit")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
+            connection.setRequestProperty("User-Agent", "HorizonMusic/1.0")
+            if (connection.responseCode == 200) {
+                val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonObject = JSONObject(jsonText)
+                val results = jsonObject.optJSONArray("results") ?: return@withContext emptyList()
+                val list = mutableListOf<OnlineTrack>()
+                for (i in 0 until results.length()) {
+                    val r = results.getJSONObject(i)
+                    list.add(OnlineTrack(
+                        id = r.optString("id", ""),
+                        title = r.optString("title", "Sem Título"),
+                        artist = r.optString("artist", "Artista Desconhecido"),
+                        thumbnail = r.optString("thumbnail", ""),
+                        url = r.optString("url", "https://www.youtube.com/watch?v=${r.optString("id", "")}"),
+                    ))
+                }
+                list
+            } else {
+                Log.w("MusicViewModel", "Servidor de busca retornou ${connection.responseCode}")
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.w("MusicViewModel", "Servidor de busca indisponível", e)
+            emptyList()
+        }
     }
 
     fun searchOnline(query: String) {
@@ -467,6 +515,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             _isSearchingOnline.value = true
             _searchOnlineError.value = null
             _onlineSearchResults.value = emptyList()
+            
+            // 0. Tenta o servidor yt-dlp primeiro (rápido e confiável)
+            val serverResults = searchViaServer(query, 12)
+            if (serverResults.isNotEmpty()) {
+                _isSearchingOnline.value = false
+                _onlineSearchResults.value = serverResults
+                return@launch
+            }
             
             var success = false
             val results = mutableListOf<OnlineTrack>()
@@ -970,7 +1026,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun extractStreamUrlFromPiped(trackId: String): String? {
         resolvedStreamUrls[trackId]?.let { return it }
-        
+
+        // 0. Tenta o servidor yt-dlp primeiro (confiável)
+        val serverUrl = extractStreamUrlFromServer(trackId)
+        if (serverUrl != null) {
+            resolvedStreamUrls[trackId] = serverUrl
+            return serverUrl
+        }
+
         val mainPipedInstance = "https://api.piped.yt"
         val fallbackPipedInstance = "https://pipedapi.kavin.rocks"
 
@@ -1061,6 +1124,33 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         return finalUrl
     }
 
+    // Extrai o link de áudio pelo servidor yt-dlp (Horizon Server)
+    private suspend fun extractStreamUrlFromServer(videoId: String): String? = withContext(Dispatchers.IO) {
+        val base = _serverBaseUrl.value
+        if (base.isEmpty()) return@withContext null
+        try {
+            val url = URL("$base/stream?url=${URLEncoder.encode("https://www.youtube.com/watch?v=$videoId", "UTF-8")}")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 25000
+            connection.readTimeout = 25000
+            connection.setRequestProperty("User-Agent", "HorizonMusic/1.0")
+            if (connection.responseCode == 200) {
+                val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonObject = JSONObject(jsonText)
+                val streamUrl = jsonObject.optString("url", "")
+                if (streamUrl.isNotEmpty()) {
+                    Log.d("MusicViewModel", "[Server yt-dlp SUCESSO] URL extraída: $streamUrl")
+                    return@withContext streamUrl
+                }
+            } else {
+                Log.w("MusicViewModel", "[Server yt-dlp] HTTP ${connection.responseCode}")
+            }
+        } catch (e: Exception) {
+            Log.w("MusicViewModel", "[Server yt-dlp] Erro ao extrair stream de $videoId", e)
+        }
+        null
+    }
+
     fun playOnlineTrack(track: OnlineTrack, context: Context) {
         viewModelScope.launch {
             playerManager.setBuffering(true)
@@ -1129,57 +1219,35 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             
             val success = withContext(Dispatchers.IO) {
                 try {
-                    val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-                    val horizonDir = File(musicDir, "Horizon")
-                    if (!horizonDir.exists()) {
-                        horizonDir.mkdirs()
-                    }
-                    
                     val cleanArtist = track.artist.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
                     val cleanTitle = track.title.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
                     val fileName = "$cleanArtist - $cleanTitle.m4a"
-                    val destinationFile = File(horizonDir, fileName)
-                    
+
                     val url = URL(streamUrl)
                     val connection = url.openConnection() as HttpURLConnection
                     connection.connectTimeout = 15000
                     connection.readTimeout = 15000
                     connection.setRequestProperty("User-Agent", "Mozilla/5.0")
                     connection.connect()
-                    
+
                     val responseCode = connection.responseCode
                     if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_PARTIAL) {
                         val fileLength = connection.contentLength
                         val inputStream: InputStream = connection.inputStream
-                        val outputStream = FileOutputStream(destinationFile)
-                        
-                        val data = ByteArray(8192)
-                        var total: Long = 0
-                        var count: Int
-                        while (inputStream.read(data).also { count = it } != -1) {
-                            total += count
-                            if (fileLength > 0) {
-                                val progress = total.toFloat() / fileLength
-                                _downloadProgresses.value = _downloadProgresses.value.toMutableMap().apply {
-                                    put(trackId, progress)
-                                }
-                            }
-                            outputStream.write(data, 0, count)
+
+                        // Android 10+ (API 29+): usa MediaStore (sem precisar de permissão de escrita)
+                        val savedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            saveToMediaStore(context, fileName, inputStream, fileLength, trackId)
+                        } else {
+                            saveToLegacyStorage(context, fileName, inputStream, fileLength, trackId)
                         }
-                        
-                        outputStream.flush()
-                        outputStream.close()
-                        inputStream.close()
-                        
-                        MediaScannerConnection.scanFile(
-                            context,
-                            arrayOf(destinationFile.absolutePath),
-                            arrayOf("audio/mp4", "audio/m4a", "audio/x-m4a", "audio/*")
-                        ) { path, uri ->
-                            Log.d("MusicViewModel", "Scanned track: $path - URI: $uri")
+
+                        if (savedUri != null) {
                             rescanLocalDirectory()
+                            true
+                        } else {
+                            false
                         }
-                        true
                     } else {
                         val errorMsg = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
                         Log.e("MusicViewModel", "Erro de Download: HTTP $responseCode - $errorMsg")
@@ -1200,6 +1268,104 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     put(trackId, DownloadState.Error("Falha ao salvar o áudio."))
                 }
             }
+        }
+    }
+
+    // Salva o download via MediaStore (Android 10+, sem permissão de escrita)
+    private fun saveToMediaStore(
+        context: Context,
+        fileName: String,
+        inputStream: InputStream,
+        fileLength: Long,
+        trackId: String,
+    ): Uri? {
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+                put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Horizon")
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val uri = resolver.insert(collection, values) ?: return null
+
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                val data = ByteArray(8192)
+                var total: Long = 0
+                var count: Int
+                while (inputStream.read(data).also { count = it } != -1) {
+                    total += count
+                    if (fileLength > 0) {
+                        val progress = total.toFloat() / fileLength
+                        _downloadProgresses.value = _downloadProgresses.value.toMutableMap().apply {
+                            put(trackId, progress)
+                        }
+                    }
+                    outputStream.write(data, 0, count)
+                }
+                outputStream.flush()
+            }
+            inputStream.close()
+
+            // Marca como pronto pro MediaStore
+            values.clear()
+            values.put(MediaStore.Audio.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            Log.d("MusicViewModel", "Download salvo via MediaStore: $uri")
+            return uri
+        } catch (e: Exception) {
+            Log.e("MusicViewModel", "Erro ao salvar via MediaStore", e)
+            return null
+        }
+    }
+
+    // Fallback pra Android 9 e anteriores (com permissão de escrita)
+    private fun saveToLegacyStorage(
+        context: Context,
+        fileName: String,
+        inputStream: InputStream,
+        fileLength: Long,
+        trackId: String,
+    ): Uri? {
+        try {
+            val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            val horizonDir = File(musicDir, "Horizon")
+            if (!horizonDir.exists()) {
+                horizonDir.mkdirs()
+            }
+            val destinationFile = File(horizonDir, fileName)
+            val outputStream = FileOutputStream(destinationFile)
+
+            val data = ByteArray(8192)
+            var total: Long = 0
+            var count: Int
+            while (inputStream.read(data).also { count = it } != -1) {
+                total += count
+                if (fileLength > 0) {
+                    val progress = total.toFloat() / fileLength
+                    _downloadProgresses.value = _downloadProgresses.value.toMutableMap().apply {
+                        put(trackId, progress)
+                    }
+                }
+                outputStream.write(data, 0, count)
+            }
+
+            outputStream.flush()
+            outputStream.close()
+            inputStream.close()
+
+            MediaScannerConnection.scanFile(
+                context,
+                arrayOf(destinationFile.absolutePath),
+                arrayOf("audio/mp4", "audio/m4a", "audio/x-m4a", "audio/*")
+            ) { path, uri ->
+                Log.d("MusicViewModel", "Scanned track: $path - URI: $uri")
+            }
+            return Uri.fromFile(destinationFile)
+        } catch (e: Exception) {
+            Log.e("MusicViewModel", "Erro ao salvar no armazenamento legado", e)
+            return null
         }
     }
 
