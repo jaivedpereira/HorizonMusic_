@@ -1232,7 +1232,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
                     val responseCode = connection.responseCode
                     if (responseCode == HttpURLConnection.HTTP_OK || responseCode == HttpURLConnection.HTTP_PARTIAL) {
-                        val fileLength = connection.contentLength
+                        val fileLength = connection.contentLength.toLong()
                         val inputStream: InputStream = connection.inputStream
 
                         // Android 10+ (API 29+): usa MediaStore (sem precisar de permissão de escrita)
