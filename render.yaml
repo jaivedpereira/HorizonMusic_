@@ -1,0 +1,11 @@
+# Render blueprint — deploy de 1 clique: https://render.com
+# Conecta a conta do Render com o GitHub e cria o serviço automaticamente.
+services:
+  - type: web
+    name: horizon-music-server
+    runtime: python
+    plan: free
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /health

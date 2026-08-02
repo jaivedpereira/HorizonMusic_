@@ -22,6 +22,7 @@ No celular com o app:
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import yt_dlp
@@ -115,6 +116,7 @@ def search():
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    # Render injeta a porta na env var PORT; localmente usa 8080 (ou argv)
+    port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 else "8080"))
     print(f"🎵 Horizon Music server rodando em http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
